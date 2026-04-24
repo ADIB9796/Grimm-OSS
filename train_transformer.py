@@ -8,10 +8,15 @@ from src.models.dataset import create_sequences
 def train_model():
     print("[1/4] Fetching Market Data...")
     manager = DataManager()
+    # Fetching the data
     data = manager.get_crypto_data(symbol="BTC/USD", exchange="kraken", timeframe="1h", limit=3000)
     
-    # Normalize features (Crucial for Transformer stability)
+    # --- FIX: Ensure we are using the 10-feature set ---
+    # Assuming your indicators are already in the dataframe returned by manager.get_crypto_data
+    # If not, add your indicator calculation here (e.g., data = manager.add_technical_indicators(data))
     numeric_data = data.select_dtypes(include=[float, int]).copy()
+    
+    # Normalize features
     for col in numeric_data.columns:
         numeric_data[col] = (numeric_data[col] - numeric_data[col].mean()) / (numeric_data[col].std() + 1e-8)
 
@@ -25,8 +30,10 @@ def train_model():
     X = torch.FloatTensor(X).to(device)
     y = torch.LongTensor(y).to(device)
 
-    # Initialize Model
-    input_size = X.shape[2]
+    # --- FIX: Explicitly set input_size based on X ---
+    input_size = X.shape[2] 
+    print(f"[INFO] Training Transformer with {input_size} features...")
+    
     model = PriceTransformer(input_size=input_size).to(device)
     
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.0005)
