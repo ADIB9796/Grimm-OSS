@@ -14,6 +14,7 @@ class TradingEnvironment(gym.Env):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # --- CALCULATE RAW ATR FOR RISK MANAGER ---
+        # (This adds an 11th column to raw_data)
         high_low = self.raw_data['high'] - self.raw_data['low']
         high_close = np.abs(self.raw_data['high'] - self.raw_data['close'].shift(1))
         low_close = np.abs(self.raw_data['low'] - self.raw_data['close'].shift(1))
@@ -21,6 +22,8 @@ class TradingEnvironment(gym.Env):
         self.raw_data['atr'] = true_range.rolling(14).mean() 
         
         self.transaction_cost = transaction_cost
+        
+        # self.data will now have 15 columns total after this call
         self.data = self._prepare_features(self.raw_data)
         
         self.initial_balance = initial_balance
@@ -28,9 +31,9 @@ class TradingEnvironment(gym.Env):
         
         # --- TRANSFORMER SETUP ---
         self.seq_len = 50
-        self.price_model = PriceTransformer(input_size=self.data.shape[1]).to(self.device)
+        # FIX: Hardcode input_size=10 to perfectly match the trained checkpoint
+        self.price_model = PriceTransformer(input_size=10).to(self.device)
         
-        # Graceful loading in case weights don't exist yet
         try:
             self.price_model.load_state_dict(torch.load("models/price_model.pth", map_location=self.device, weights_only=True))
         except FileNotFoundError:
@@ -41,19 +44,21 @@ class TradingEnvironment(gym.Env):
         
         self.action_space = spaces.Discrete(3) 
         
-        # CRITICAL FIX: Base features + 3 prediction outputs (Up, Neutral, Down)
+        # RL Agent sees 15 Base Features + 3 Predictions = 18 total features
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, shape=(self.data.shape[1] + 3,), dtype=np.float32
         )
 
     def _prepare_features(self, df):
         df = df.copy().select_dtypes(include=[np.number])
+        # Adds 4 more columns, bringing total to 15
         df["log_return"] = np.log(df["close"] / df["close"].shift(1))
         df["ma_fast"] = df["close"].rolling(5).mean()
         df["ma_slow"] = df["close"].rolling(20).mean()
         df["volatility"] = df["log_return"].rolling(10).std()
         df = df.dropna()
 
+        # Normalize everything
         for col in df.columns:
             std = df[col].std()
             df[col] = 0 if std == 0 or np.isnan(std) else (df[col] - df[col].mean()) / (std + 1e-8)
@@ -76,26 +81,28 @@ class TradingEnvironment(gym.Env):
         self.entry_price = 0
         self.current_step = 0
         self.returns = []
-        self.history = [] # Reset Transformer memory window
+        self.history = []
         
         return self._get_observation(), {}
 
     def _get_observation(self):
-        base_state = self.data.iloc[self.current_step].values.astype(np.float32)
+        # full_state has 15 columns
+        full_state = self.data.iloc[self.current_step].values.astype(np.float32)
         
-        # Manage the rolling window of history
-        self.history.append(base_state)
+        # FIX: Slice the first 10 columns for the Transformer's memory window
+        transformer_input = full_state[:10]
+        self.history.append(transformer_input)
+        
         if len(self.history) > self.seq_len:
             self.history.pop(0)
             
-        # Get predictions if we have enough history, otherwise feed neutrals
         if len(self.history) == self.seq_len:
             pred = self.get_prediction(np.array(self.history))
         else:
-            pred = np.array([0.0, 1.0, 0.0]) # Default to "Neutral" confidence
+            pred = np.array([0.0, 1.0, 0.0]) # Neutral
             
-        # Combine the original row with the AI prediction
-        return np.concatenate([base_state, pred]).astype(np.float32)
+        # RL Agent gets all 15 features PLUS the 3 predictions
+        return np.concatenate([full_state, pred]).astype(np.float32)
 
     def step(self, action):
         done = False
