@@ -23,7 +23,8 @@ def main():
 
     # 2. HYPERPARAMETER TUNING STAGE
     print("\n[2/3] Running Optuna Optimization...")
-    print("      (This will evaluate 20 different configurations across 3,000 mini-episodes)") # cite: [uploaded:optuna_tunar.py]
+    # Calculation: 50 trials * 2 folds * 100 episodes = 10,000 total episodes
+    print("      (This will evaluate 50 different configurations across 10,000 total episodes)")
     
     best_params = run_optimization(train_data) # cite: [uploaded:optuna_tunar.py]
 

@@ -67,7 +67,6 @@ class DQN(nn.Module):
 # RL AGENT
 # =========================
 class RLAgent:
-    # Notice the hyperparameters added to the __init__ signature
     def __init__(self, state_size, action_size, lr=1e-4, gamma=0.99, epsilon_decay=0.995, batch_size=64):
         self.state_size = state_size
         self.action_size = action_size
@@ -78,7 +77,6 @@ class RLAgent:
         self.target_model = DQN(state_size, action_size).to(self.device)
         self.target_model.load_state_dict(self.model.state_dict())
 
-        # Parameters controlled dynamically by Optuna
         self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
         self.gamma = gamma
         self.epsilon_decay = epsilon_decay
@@ -99,7 +97,19 @@ class RLAgent:
         state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         with torch.no_grad():
             q_values = self.model(state)
-        return torch.argmax(q_values).item()
+            
+        # TWEAK 4: ACTION THRESHOLD
+        q_vals_array = q_values.cpu().numpy()[0]
+        best_action = np.argmax(q_vals_array)
+        
+        # Action 0 is HOLD, Action 1 is BUY, Action 2 is SELL
+        # The agent must have a Q-value advantage of at least 0.15 over "HOLD" to execute a trade.
+        # Otherwise, it defaults to HOLD.
+        if best_action in [1, 2]:
+            if (q_vals_array[best_action] - q_vals_array[0]) < 0.15:
+                return 0 
+                
+        return best_action
 
     def remember(self, state, action, reward, next_state, done):
         self.memory.add((state, action, reward, next_state, done))

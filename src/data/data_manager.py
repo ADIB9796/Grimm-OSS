@@ -31,37 +31,37 @@ class DataManager:
         return self.add_technical_indicators(df)
 
     def add_technical_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Pure Pandas/Numpy implementation. No external dependencies required.
-        """
         df = df.copy()
         
-        # 1. RSI (14)
+        # 1-5. Original Features
         delta = df['close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
         rs = gain / loss
         df['RSI_14'] = 100 - (100 / (1 + rs))
 
-        # 2. ATR (14)
         high_low = df['high'] - df['low']
         high_close = (df['high'] - df['close'].shift()).abs()
         low_close = (df['low'] - df['close'].shift()).abs()
         tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
         df['ATRr_14'] = tr.rolling(14).mean()
 
-        # 3. SMA (20)
         df['SMA_20'] = df['close'].rolling(20).mean()
-
-        # 4. Volatility (20)
         df['STDEV_20'] = df['close'].rolling(20).std()
-
-        # 5. Price Change
         df['PCTRET_1'] = df['close'].pct_change()
 
-        # Drop NaNs created by rolling windows
+        # 6. FEATURE EXPANSION: Rolling VWAP (24 periods)
+        typical_price = (df['high'] + df['low'] + df['close']) / 3
+        vol_price = typical_price * df['volume']
+        df['VWAP_24'] = vol_price.rolling(24).sum() / (df['volume'].rolling(24).sum() + 1e-8)
+
+        # 7. FEATURE EXPANSION: Order Book Imbalance Proxy (Money Flow / Buying Pressure)
+        # Calculates how much volume is driving the close towards the high vs the low
+        buy_pressure = (df['close'] - df['open']) / (df['high'] - df['low'] + 1e-8)
+        df['VOL_IMB'] = buy_pressure * df['volume']
+
         df = df.dropna()
         
-        # Enforce exact 10-column set for Transformer compatibility
-        cols = ['open', 'high', 'low', 'close', 'volume', 'RSI_14', 'ATRr_14', 'SMA_20', 'STDEV_20', 'PCTRET_1']
+        # Return 12 columns (Transformer will only use the first 10, RL agent gets all 12 + internal state)
+        cols = ['open', 'high', 'low', 'close', 'volume', 'RSI_14', 'ATRr_14', 'SMA_20', 'STDEV_20', 'PCTRET_1', 'VWAP_24', 'VOL_IMB']
         return df[cols]
