@@ -8,18 +8,21 @@ from src.models.price_predictor import PriceTransformer
 def create_sequences(data, seq_length=50):
     sequences = []
     labels = []
-    # SLICE: Ensure we only train on the first 10 columns (the original features)
+    # SLICE: Ensure we only use the first 10 columns (the primary features)
     data_10_features = data[:, :10] 
     
     for i in range(len(data_10_features) - seq_length - 1):
         seq = data_10_features[i:(i + seq_length)]
-        # Define Up(1) / Down(2) / Neutral(0)
+        
+        # Current vs Next Price for Classification
         current_price = data_10_features[i + seq_length - 1, 3] # Close price
         next_price = data_10_features[i + seq_length, 3]
         
-        if next_price > current_price * 1.001:
+        # VERSION 2.1 THRESHOLD HARDENING
+        # Increasing to 0.3% to avoid fitting to market noise
+        if next_price > current_price * 1.003:
             label = 1 # UP
-        elif next_price < current_price * 0.999:
+        elif next_price < current_price * 0.997:
             label = 2 # DOWN
         else:
             label = 0 # NEUTRAL
@@ -42,18 +45,24 @@ def train():
     print("[2/4] Building Sequences (Seq Length: 50)...")
     X, y = create_sequences(normalized_data)
     
+    # DIAGNOSTIC: Check if we have enough UP/DOWN labels
+    unique, counts = np.unique(y, return_counts=True)
+    print(f"      Label Distribution: {dict(zip(unique, counts))}")
+    
     X_tensor = torch.FloatTensor(X)
     y_tensor = torch.LongTensor(y)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"      Using device: {device}")
     
-    # Model inherently expects 10 features
+    # Model inherent expects 10 features
     model = PriceTransformer(input_size=10).to(device)
+    
+    # OPTIONAL: Weighting classes if distribution is skewed
+    # If Neutral (0) is massive, we weight UP(1) and DOWN(2) higher
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr=0.0005) # Lowered LR for stability
 
-    # VERSION 2.0 TWEAK: 30 Epochs to break the 0.9370 plateau
     epochs = 30 
     batch_size = 64
 
