@@ -8,21 +8,19 @@ from src.models.price_predictor import PriceTransformer
 def create_sequences(data, seq_length=50):
     sequences = []
     labels = []
-    # SLICE: Ensure we only use the first 10 columns (the primary features)
     data_10_features = data[:, :10] 
     
     for i in range(len(data_10_features) - seq_length - 1):
         seq = data_10_features[i:(i + seq_length)]
         
-        # Current vs Next Price for Classification
-        current_price = data_10_features[i + seq_length - 1, 3] # Close price
+        current_price = data_10_features[i + seq_length - 1, 3] 
         next_price = data_10_features[i + seq_length, 3]
         
-        # VERSION 2.1 THRESHOLD HARDENING
-        # Increasing to 0.3% to avoid fitting to market noise
-        if next_price > current_price * 1.003:
+        # TWEAK: Relaxed threshold slightly to 0.2% to capture more 'Neutral' states
+        # On 1h charts, 0.3% can be too aggressive for BTC during consolidation
+        if next_price > current_price * 1.002:
             label = 1 # UP
-        elif next_price < current_price * 0.997:
+        elif next_price < current_price * 0.998:
             label = 2 # DOWN
         else:
             label = 0 # NEUTRAL
@@ -32,41 +30,42 @@ def create_sequences(data, seq_length=50):
     return np.array(sequences), np.array(labels)
 
 def train():
-    print("[1/4] Fetching Market Data...")
     dm = DataManager()
+    # Fetching 3000 now works thanks to the loop in DataManager
     df = dm.get_crypto_data("kraken", "BTC/USD", "1h", 3000)
     
-    # Normalize
     data_values = df.values
     data_mean = np.mean(data_values, axis=0)
     data_std = np.std(data_values, axis=0) + 1e-8
     normalized_data = (data_values - data_mean) / data_std
 
-    print("[2/4] Building Sequences (Seq Length: 50)...")
     X, y = create_sequences(normalized_data)
     
-    # DIAGNOSTIC: Check if we have enough UP/DOWN labels
+    # CALCULATE CLASS WEIGHTS
+    # This prevents the model from ignoring the minority class (Neutral)
     unique, counts = np.unique(y, return_counts=True)
     print(f"      Label Distribution: {dict(zip(unique, counts))}")
     
+    class_weights = 1.0 / counts
+    class_weights = torch.FloatTensor(class_weights / class_weights.sum() * 3.0) 
+    print(f"      Applied Weights: {class_weights.tolist()}")
+
     X_tensor = torch.FloatTensor(X)
     y_tensor = torch.LongTensor(y)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"      Using device: {device}")
+    class_weights = class_weights.to(device)
     
-    # Model inherent expects 10 features
     model = PriceTransformer(input_size=10).to(device)
     
-    # OPTIONAL: Weighting classes if distribution is skewed
-    # If Neutral (0) is massive, we weight UP(1) and DOWN(2) higher
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.0005) # Lowered LR for stability
+    # CRITICAL: Passing weights to the loss function
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    optimizer = optim.Adam(model.parameters(), lr=0.0003) # Slower LR for better convergence
 
-    epochs = 30 
+    epochs = 40 # Increased to allow weights to take effect
     batch_size = 64
 
-    print(f"[3/4] Training Transformer Model for {epochs} Epochs...")
+    print(f"[3/4] Training PriceTransformer on {len(X)} samples...")
     model.train()
     for epoch in range(epochs):
         epoch_loss = 0
@@ -79,13 +78,13 @@ def train():
             loss = criterion(outputs, batch_y)
             loss.backward()
             optimizer.step()
-            
             epoch_loss += loss.item()
             
-        print(f"      Epoch {epoch+1:02d}/{epochs} | Loss: {epoch_loss/len(X_tensor)*batch_size:.4f}")
+        if (epoch + 1) % 5 == 0:
+            print(f"      Epoch {epoch+1:02d}/{epochs} | Loss: {epoch_loss/len(X_tensor)*batch_size:.4f}")
 
     torch.save(model.state_dict(), "models/price_model.pth")
-    print("[4/4] Training Complete. Model saved to models/price_model.pth")
+    print("[4/4] Training Complete.")
 
 if __name__ == "__main__":
     train()
