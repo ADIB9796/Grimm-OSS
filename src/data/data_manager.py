@@ -16,21 +16,41 @@ class DataManager:
         self.mt5 = None
 
     def get_crypto_data(self, exchange, symbol, timeframe="1h", limit=3000):
+        # 1. Get cached exchange to access timeframe math
+        ex_instance = self.ccxt.get_exchange(exchange)
+        
+        # 2. Calculate exact milliseconds per candle based on timeframe
+        tf_ms = ex_instance.parse_timeframe(timeframe) * 1000
+        
+        # 3. Calculate starting timestamp
+        since = ex_instance.milliseconds() - (limit * tf_ms)
+        
         all_df = []
         fetched = 0
-        since = self.ccxt.exchange.milliseconds() - (limit * 60 * 60 * 1000) 
         
         print(f"[INFO] Paginated fetch started for {symbol} ({limit} bars)...")
         while fetched < limit:
             chunk_limit = min(720, limit - fetched)
-            df_chunk = self.ccxt.fetch_data(exchange, symbol, timeframe, chunk_limit)
-            if df_chunk.empty: break
+            df_chunk = self.ccxt.fetch_data(exchange, symbol, timeframe, chunk_limit, since=since)
+            
+            if df_chunk is None or df_chunk.empty:
+                break
                 
             all_df.append(df_chunk)
             fetched += len(df_chunk)
-            time.sleep(0.1)
+            
+            # 4. Advance the 'since' tracker to the last fetched candle + 1ms
+            last_timestamp = int(df_chunk['timestamp'].iloc[-1].timestamp() * 1000)
+            since = last_timestamp + 1
+            
+            # Respect exchange rate limits during pagination
+            rate_limit = ex_instance.rateLimit / 1000.0 if ex_instance.rateLimit else 0.1
+            time.sleep(rate_limit)
 
-        full_df = pd.concat(all_df).drop_duplicates().sort_index()
+        if not all_df:
+            return pd.DataFrame()
+
+        full_df = pd.concat(all_df).drop_duplicates(subset=['timestamp']).sort_values('timestamp').reset_index(drop=True)
         return self.add_technical_indicators(full_df.tail(limit))
 
     def get_stock_data(self, symbol, start, end, interval="1d"):
@@ -48,6 +68,7 @@ class DataManager:
         Pure Pandas implementation of technical indicators.
         Returns 12 columns: 10 for PriceTransformer, 12 for RL Agent.
         """
+        if df.empty: return df
         df = df.copy()
         
         # 1. RSI (Momentum)
