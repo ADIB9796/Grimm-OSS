@@ -110,7 +110,7 @@ class TradingEnvironment(gym.Env):
         if action == 1: # BUY
             if self.position == 0:
                 if transformer_up_confidence >= 0.65:
-                    stop_loss = self.risk_manager.calculate_stop_loss(price, risk_percent=current_atr/price)
+                    stop_loss = self.risk_manager.calculate_atr_stop_loss(price, risk_percent=current_atr/price)
                     size = self.risk_manager.calculate_position_size(price, stop_loss)
                     
                     if size > 0:
