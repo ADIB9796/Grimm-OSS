@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import random
-from .risk_manager import RiskManager
+import os
 
 class PrioritizedReplayBuffer:
     def __init__(self, capacity=10000, alpha=0.6):
@@ -42,47 +42,52 @@ class DQN(nn.Module):
             nn.ReLU(),
             nn.Linear(256, action_size)
         )
-    def forward(self, x): return self.network(x)
+    def forward(self, x): 
+        return self.network(x)
 
 class RLAgent:
-    def __init__(self, state_size, action_size, initial_balance=10000, lr=1e-4, gamma=0.99):
+    # Added batch_size and epsilon_decay so Optuna kwargs don't crash
+    def __init__(self, state_size, action_size, lr=1e-4, gamma=0.99, epsilon_decay=0.995, batch_size=64):
         self.state_size = state_size
         self.action_size = action_size
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Core Models
         self.model = DQN(state_size, action_size).to(self.device)
         self.target_model = DQN(state_size, action_size).to(self.device)
         self.target_model.load_state_dict(self.model.state_dict())
         
-        # Risk & Speed
-        self.risk_manager = RiskManager(balance=initial_balance)
         self.scaler = torch.amp.GradScaler('cuda') if torch.cuda.is_available() else None
-        
         self.optimizer = optim.Adam(self.model.parameters(), lr=lr)
         self.memory = PrioritizedReplayBuffer()
-        self.gamma, self.epsilon, self.epsilon_decay = gamma, 1.0, 0.995
-        self.batch_size, self.step_count = 64, 0
+        
+        self.gamma = gamma
+        self.epsilon = 1.0
+        self.epsilon_min = 0.01
+        self.epsilon_decay = epsilon_decay
+        self.batch_size = batch_size
+        self.step_count = 0
 
-    def act(self, state, transformer_confidence=0.5):
-        """Returns (action, position_size) based on Q-values and Kelly math."""
+    def act(self, state):
+        """Returns action integer for standard Gym environments."""
         if np.random.rand() <= self.epsilon:
-            action = random.randrange(self.action_size)
-        else:
-            state_t = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-            with torch.no_grad():
-                q_vals = self.model(state_t).cpu().numpy()[0]
-            action = np.argmax(q_vals)
-            # Use Q-value advantage check (from your TWEAK 4)
-            if action != 0 and (q_vals[action] - q_vals[0]) < 0.15:
-                action = 0
+            return random.randrange(self.action_size)
+        
+        state_t = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+        with torch.no_grad():
+            q_vals = self.model(state_t).cpu().numpy()[0]
+            
+        action = int(np.argmax(q_vals))
+        
+        # Q-value advantage check
+        if action != 0 and (q_vals[action] - q_vals[0]) < 0.15:
+            action = 0
 
-        # Calculate sizing for non-hold actions
-        size = self.risk_manager.get_kelly_size(transformer_confidence) if action != 0 else 0.0
-        return action, size
+        return action
 
     def replay(self):
-        if len(self.memory.memory) < self.batch_size: return
+        if len(self.memory.memory) < self.batch_size: 
+            return
+            
         samples, indices = self.memory.sample(self.batch_size)
         s, a, r, ns, d = zip(*samples)
 
@@ -92,7 +97,6 @@ class RLAgent:
         r = torch.tensor(r, dtype=torch.float32).to(self.device)
         d = torch.tensor(d, dtype=torch.float32).to(self.device)
 
-        # Mixed Precision Training
         with torch.amp.autocast('cuda' if torch.cuda.is_available() else 'cpu'):
             current_q = self.model(s).gather(1, a.unsqueeze(1)).squeeze()
             next_actions = torch.argmax(self.model(ns), dim=1)
@@ -109,11 +113,19 @@ class RLAgent:
             loss.backward()
             self.optimizer.step()
 
-        # Update Buffer Priorities
         self.memory.update_priorities(indices, (current_q - target_q).detach().cpu().numpy())
         self.step_count += 1
         if self.step_count % 50 == 0:
             self.target_model.load_state_dict(self.model.state_dict())
 
     def update_epsilon(self):
-        self.epsilon = max(0.01, self.epsilon * self.epsilon_decay)
+        self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
+
+    def save(self, filepath):
+        """Saves the DQN model weights."""
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        torch.save(self.model.state_dict(), filepath)
+        
+    def load(self, filepath):
+        """Loads the DQN model weights."""
+        self.model.load_state_dict(torch.load(filepath, map_location=self.device, weights_only=True))

@@ -1,29 +1,37 @@
 import numpy as np
 
-def create_sequences(df, seq_len=50, threshold=0.001):
+def create_sequences(data, seq_len=50, threshold=0.002):
     """
-    Converts a 2D DataFrame into 3D sequences for the Transformer.
-    Labels: 0 (Down), 1 (Neutral), 2 (Up).
+    Converts a normalized 2D array into 3D sequences for the Transformer.
+    Ensures we only use the first 10 features (OHLCV + Alpha Indicators).
+    
+    Labels: 
+    0: Down (Price drops > threshold)
+    1: Neutral (Price stays within bounds)
+    2: Up (Price rises > threshold)
     """
     X, y = [], []
+    data_10_features = data[:, :10] 
     
-    # Calculate future returns to create our labels (predicting the next candle)
-    future_returns = df['close'].pct_change().shift(-1).fillna(0).values
-    features = df.values
-
-    for i in range(len(df) - seq_len):
-        # Extract a window of 'seq_len' rows
-        window = features[i : (i + seq_len)]
-        X.append(window)
+    # We stop early enough so we have a "next" candle to predict
+    for i in range(len(data_10_features) - seq_len):
+        window = data_10_features[i : (i + seq_len)]
         
-        # Determine the label based on the next candle's return
-        ret = future_returns[i + seq_len - 1]
+        # Feature index 3 is 'close' price
+        current_price = data_10_features[i + seq_len - 1, 3] 
+        next_price = data_10_features[i + seq_len, 3]
         
-        if ret > threshold:
-            y.append(2)  # Price goes up significantly
-        elif ret < -threshold:
-            y.append(0)  # Price goes down significantly
+        # Calculate true percentage change
+        pct_change = (next_price - current_price) / (abs(current_price) + 1e-8)
+        
+        if pct_change > threshold:
+            label = 2  # UP
+        elif pct_change < -threshold:
+            label = 0  # DOWN
         else:
-            y.append(1)  # Sideways / Neutral market
+            label = 1  # NEUTRAL
+            
+        X.append(window)
+        y.append(label)
 
     return np.array(X, dtype=np.float32), np.array(y, dtype=np.int64)

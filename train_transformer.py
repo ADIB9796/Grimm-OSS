@@ -4,49 +4,35 @@ import torch.optim as optim
 import numpy as np
 from src.data.data_manager import DataManager
 from src.models.price_predictor import PriceTransformer
-
-def create_sequences(data, seq_length=50):
-    sequences = []
-    labels = []
-    data_10_features = data[:, :10] 
-    
-    for i in range(len(data_10_features) - seq_length - 1):
-        seq = data_10_features[i:(i + seq_length)]
-        
-        current_price = data_10_features[i + seq_length - 1, 3] 
-        next_price = data_10_features[i + seq_length, 3]
-        
-        # TWEAK: Relaxed threshold slightly to 0.2% to capture more 'Neutral' states
-        # On 1h charts, 0.3% can be too aggressive for BTC during consolidation
-        if next_price > current_price * 1.002:
-            label = 1 # UP
-        elif next_price < current_price * 0.998:
-            label = 2 # DOWN
-        else:
-            label = 0 # NEUTRAL
-            
-        sequences.append(seq)
-        labels.append(label)
-    return np.array(sequences), np.array(labels)
+from src.data.dataset import create_sequences
 
 def train():
+    print("[1/4] Fetching Market Data...")
     dm = DataManager()
-    # Fetching 3000 now works thanks to the loop in DataManager
     df = dm.get_crypto_data("kraken", "BTC/USD", "1h", 3000)
     
+    print(f"[INFO] Retrieved {len(df)} historical bars from DataManager.")
+    
+    if len(df) < 100:
+        print("[ERROR] Not enough data fetched to train. Exiting.")
+        return
+
+    # Normalize Data
     data_values = df.values
     data_mean = np.mean(data_values, axis=0)
     data_std = np.std(data_values, axis=0) + 1e-8
     normalized_data = (data_values - data_mean) / data_std
 
-    X, y = create_sequences(normalized_data)
+    print("[2/4] Building Sequences (Seq Length: 50)...")
+    # Using the unified dataset.py logic
+    X, y = create_sequences(normalized_data, seq_len=50, threshold=0.002)
     
-    # CALCULATE CLASS WEIGHTS
-    # This prevents the model from ignoring the minority class (Neutral)
+    # Calculate Class Weights
     unique, counts = np.unique(y, return_counts=True)
-    print(f"      Label Distribution: {dict(zip(unique, counts))}")
+    dist = dict(zip(unique, counts))
+    print(f"      Label Distribution: Down(0): {dist.get(0,0)}, Neutral(1): {dist.get(1,0)}, Up(2): {dist.get(2,0)}")
     
-    class_weights = 1.0 / counts
+    class_weights = 1.0 / (counts + 1e-8)
     class_weights = torch.FloatTensor(class_weights / class_weights.sum() * 3.0) 
     print(f"      Applied Weights: {class_weights.tolist()}")
 
@@ -54,37 +40,49 @@ def train():
     y_tensor = torch.LongTensor(y)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"      Using device: {device}")
     class_weights = class_weights.to(device)
     
     model = PriceTransformer(input_size=10).to(device)
     
-    # CRITICAL: Passing weights to the loss function
     criterion = nn.CrossEntropyLoss(weight=class_weights)
-    optimizer = optim.Adam(model.parameters(), lr=0.0003) # Slower LR for better convergence
+    # Added weight_decay (L2 Regularization) to prevent overfitting
+    optimizer = optim.Adam(model.parameters(), lr=0.0003, weight_decay=1e-5) 
 
-    epochs = 40 # Increased to allow weights to take effect
+    epochs = 40 
     batch_size = 64
 
     print(f"[3/4] Training PriceTransformer on {len(X)} samples...")
     model.train()
+    
     for epoch in range(epochs):
         epoch_loss = 0
+        
+        # TWEAK: Shuffle the dataset every epoch to prevent pattern memorization
+        permutation = torch.randperm(X_tensor.size()[0])
+        
         for i in range(0, len(X_tensor), batch_size):
-            batch_X = X_tensor[i:i+batch_size].to(device)
-            batch_y = y_tensor[i:i+batch_size].to(device)
+            indices = permutation[i:i+batch_size]
+            batch_X = X_tensor[indices].to(device)
+            batch_y = y_tensor[indices].to(device)
 
             optimizer.zero_grad()
             outputs = model(batch_X)
             loss = criterion(outputs, batch_y)
             loss.backward()
-            optimizer.step()
-            epoch_loss += loss.item()
             
+            # TWEAK: Gradient Clipping to prevent "loss spikes"
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            
+            optimizer.step()
+            epoch_loss += loss.item() * len(batch_X)
+            
+        avg_loss = epoch_loss / len(X_tensor)
         if (epoch + 1) % 5 == 0:
-            print(f"      Epoch {epoch+1:02d}/{epochs} | Loss: {epoch_loss/len(X_tensor)*batch_size:.4f}")
+            print(f"      Epoch {epoch+1:02d}/{epochs} | Loss: {avg_loss:.4f}")
 
     torch.save(model.state_dict(), "models/price_model.pth")
-    print("[4/4] Training Complete.")
+    print("[4/4] Training Complete. Model saved to models/price_model.pth")
 
 if __name__ == "__main__":
     train()

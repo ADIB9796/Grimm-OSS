@@ -10,7 +10,6 @@ def main():
     print("\n[1/3] Loading Market Data...")
     manager = DataManager()
     
-    # Using a 2,500 limit to provide enough room for the walk-forward splits
     data = manager.get_crypto_data(
         symbol="BTC/USD",
         exchange="kraken",
@@ -18,15 +17,17 @@ def main():
         limit=2500 
     )
 
-    # Split data to keep the most recent 500 candles as a completely untouched test set
+    if data.empty:
+        print("[ERROR] Failed to fetch data. Exiting.")
+        return
+
     train_data = data.iloc[:-500]
 
     # 2. HYPERPARAMETER TUNING STAGE
     print("\n[2/3] Running Optuna Optimization...")
-    # Calculation: 50 trials * 2 folds * 100 episodes = 10,000 total episodes
     print("      (This will evaluate 50 different configurations across 10,000 total episodes)")
     
-    best_params = run_optimization(train_data) # cite: [uploaded:optuna_tunar.py]
+    best_params = run_optimization(train_data) 
 
     print("\n" + "="*50)
     print("OPTUNA STAGE COMPLETE")
@@ -35,47 +36,42 @@ def main():
 
     # 3. FINAL TRAINING STAGE
     print("\n[3/3] STARTING FINAL TRAINING...")
-    print("      Status: The agent is now learning using optimized settings.")
-
-    # Initialize environment and agent using the best parameters discovered
+    
     env = TradingEnvironment(train_data)
-    state_size = env.observation_space.shape[0] # cite: [uploaded:test_rl_agent.py]
-    action_size = env.action_space.n # cite: [uploaded:test_rl_agent.py]
+    state_size = env.observation_space.shape[0] 
+    action_size = env.action_space.n 
 
-    # Use ** unpacking to pass lr, gamma, batch_size, and epsilon_decay directly
     agent = RLAgent(
         state_size=state_size, 
         action_size=action_size,
         **best_params 
     )
 
-    episodes = 2000 # cite: [uploaded:test_rl_agent.py]
+    episodes = 2000 
 
     for e in range(episodes):
-        state, _ = env.reset() # cite: [uploaded:test_rl_agent.py]
+        state, _ = env.reset() 
         total_reward = 0
         done = False
 
         while not done:
-            action = agent.act(state) # cite: [uploaded:test_rl_agent.py]
+            action = agent.act(state) 
             
-            # Unpacking the 5-value return from newer Gymnasium environments
-            next_state, reward, done, truncated, info = env.step(action) # cite: [uploaded:test_rl_agent.py]
+            # Using standard 5-tuple Gymnasium return
+            next_state, reward, done, truncated, info = env.step(action) 
             
-            agent.remember(state, action, reward, next_state, done) # cite: [uploaded:test_rl_agent.py]
-            agent.replay() # cite: [uploaded:test_rl_agent.py]
+            agent.remember(state, action, reward, next_state, done) 
+            agent.replay() 
             
             state = next_state
             total_reward += reward
         
-        # Apply the optimized epsilon decay found by Optuna
-        agent.update_epsilon() # cite: [uploaded:test_rl_agent.py]
+        agent.update_epsilon() 
 
-        # Terminal status update every 10 episodes
-        if (e + 1) % 10 == 0: # cite: [uploaded:test_rl_agent.py]
-            print(f"Episode {e+1}/{episodes} | Reward: {total_reward:.2f} | Epsilon: {agent.epsilon:.4f}") # cite: [uploaded:test_rl_agent.py]
+        if (e + 1) % 10 == 0: 
+            print(f"Episode {e+1:04d}/{episodes} | Reward: {total_reward:6.2f} | Epsilon: {agent.epsilon:.4f}") 
 
-    # Save the final optimized model
+    # Agent now has the native save function
     agent.save("models/rl_trading_model.pth")
     print("\nTRAINING FINISHED!")
     print("      Model saved to models/rl_trading_model.pth")
