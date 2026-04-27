@@ -112,23 +112,26 @@ class TradingEnvironment(gym.Env):
 
         if action == 1: # BUY
             if self.position == 0:
-                if transformer_up_confidence >= 0.65:
-                    stop_loss = self.risk_manager.calculate_atr_stop_loss(price, current_atr)
-                    win_prob = self.current_pred[2]
+                # Index 2 is the 'UP' probability from your Transformer
+                win_prob = self.current_pred[2] 
+        
+                if win_prob >= 0.65: # Confidence threshold
+                    # Use Kelly Criterion for dynamic sizing
                     size = self.risk_manager.get_kelly_size(win_prob)
-                    
+            
                     if size > 0:
                         self.position = size 
                         self.entry_price = price
                         reward -= self.transaction_cost
                 else:
-                    action = 0 # VETO
+                    action = 0 # VETO if model isn't confident enough
 
         elif action == 2: # SELL
             if self.position > 0:
                 trade_return = (price - self.entry_price) / self.entry_price
                 pnl = self.position * (price - self.entry_price)
-                self.risk_manager.update_balance(self.risk_manager.balance + pnl)
+                new_balance = self.risk_manager.balance + pnl
+                self.risk_manager.update_performance(trade_return, new_balance)
                 
                 if self.risk_manager.balance > self.peak_balance:
                     self.peak_balance = self.risk_manager.balance
