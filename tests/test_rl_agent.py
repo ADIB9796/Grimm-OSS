@@ -9,10 +9,10 @@ def main():
     print("\n[1/3] Loading Market Data...")
     manager = DataManager()
     
-    # ENHANCEMENT: Fetch 4000 bars for deeper learning and validation
+    # CRITICAL FIX: Changed to KuCoin and BTC/USDT to bypass Kraken's 720-bar limit.
     data = manager.get_crypto_data(
-        symbol="BTC/USD",
-        exchange="kraken",
+        symbol="BTC/USDT",
+        exchange="kucoin",
         timeframe="1h",
         limit=4000 
     )
@@ -21,7 +21,12 @@ def main():
         print("[ERROR] Failed to fetch data. Exiting.")
         return
 
-    # Hold out the last 1000 bars for final Backtest engine. Train on first 3000.
+    # CRITICAL FIX: Safety check to ensure we have enough data before slicing
+    if len(data) <= 1500:
+        print(f"[ERROR] Fetched only {len(data)} bars. Need more than 1500 for a proper split.")
+        return
+
+    # Hold out the last 1000 bars for final Backtest engine. Train on the rest.
     train_data = data.iloc[:-1000]
 
     print("\n[2/3] Running Optuna Optimization...")

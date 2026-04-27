@@ -75,5 +75,10 @@ def run_optimization(data, n_trials=50):
 
 if __name__ == "__main__":
     dm = DataManager()
-    data = dm.get_crypto_data("kraken", "BTC/USD", "1h", 4000)
-    run_optimization(data)
+    # CRITICAL FIX: Changed to KuCoin and BTC/USDT to avoid Kraken limits
+    data = dm.get_crypto_data("kucoin", "BTC/USDT", "1h", 4000)
+    
+    if len(data) > 1000:
+        run_optimization(data)
+    else:
+        print("[ERROR] Insufficient data fetched for optimization.")

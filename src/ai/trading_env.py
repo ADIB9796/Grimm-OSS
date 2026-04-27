@@ -23,6 +23,10 @@ class TradingEnvironment(gym.Env):
         self.transaction_cost = transaction_cost
         self.data = self._prepare_features(self.raw_data)
         
+        # CRITICAL FIX: Safeguard against empty dataframes
+        if len(self.data) == 0:
+            raise ValueError("TradingEnvironment received empty data or data became too short after indicator calculation.")
+        
         self.initial_balance = initial_balance
         self.risk_manager = RiskManager(balance=initial_balance)
         self.peak_balance = initial_balance 
@@ -104,7 +108,6 @@ class TradingEnvironment(gym.Env):
         reward = 0
         trade_return = 0
 
-        # CRITICAL FIX: Index 2 represents UP class. Index 1 was NEUTRAL.
         transformer_up_confidence = self.current_pred[2]
 
         if action == 1: # BUY
