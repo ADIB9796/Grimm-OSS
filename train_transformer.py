@@ -4,7 +4,7 @@ import torch.optim as optim
 import numpy as np
 from src.data.data_manager import DataManager
 from src.models.price_predictor import PriceTransformer
-from src.data.dataset import create_sequences
+from src.models.dataset import create_sequences
 
 def train():
     print("[1/4] Fetching Market Data...")
