@@ -14,7 +14,7 @@ class MT5Provider:
         rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, bars)
 
         if rates is None or len(rates) == 0:
-            raise ValueError(f"No data retrieved for {symbol}. Check if symbol exists in MT5 Market Watch.")
+            raise ValueError(f"No data retrieved for {symbol}. Check if symbol exists in Market Watch.")
 
         df = pd.DataFrame(rates)
         df.rename(columns={"time": "timestamp", "tick_volume": "volume"}, inplace=True)

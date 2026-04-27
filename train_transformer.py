@@ -11,7 +11,7 @@ def train():
     dm = DataManager()
     
     # FIX 1: Switched from Kraken to Binance for deep historical access
-    df = dm.get_crypto_data("binance", "BTC/USDT", "1h", 3500)
+    df = dm.get_crypto_data("kucoin", "BTC/USDT", "1h", 3500)
     
     print(f"[INFO] Retrieved {len(df)} historical bars from DataManager.")
     
