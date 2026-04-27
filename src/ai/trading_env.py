@@ -114,7 +114,8 @@ class TradingEnvironment(gym.Env):
             if self.position == 0:
                 if transformer_up_confidence >= 0.65:
                     stop_loss = self.risk_manager.calculate_atr_stop_loss(price, current_atr)
-                    size = self.risk_manager.get_kelly_size(price, stop_loss)
+                    win_prob = self.current_pred[2]
+                    size = self.risk_manager.get_kelly_size(win_prob)
                     
                     if size > 0:
                         self.position = size 
