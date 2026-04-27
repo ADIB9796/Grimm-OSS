@@ -25,7 +25,7 @@ class TradingEnvironment(gym.Env):
         
         self.initial_balance = initial_balance
         self.risk_manager = RiskManager(balance=initial_balance)
-        self.peak_balance = initial_balance # Added for Drawdown calculation
+        self.peak_balance = initial_balance 
         
         self.seq_len = 50
         self.price_model = PriceTransformer(input_size=10).to(self.device)
@@ -81,7 +81,7 @@ class TradingEnvironment(gym.Env):
 
     def _get_observation(self):
         full_state = self.data.iloc[self.current_step].values.astype(np.float32)
-        transformer_input = full_state[:10] # Safely slices the 10 original features
+        transformer_input = full_state[:10] 
         
         self.history.append(transformer_input)
         if len(self.history) > self.seq_len:
@@ -104,13 +104,13 @@ class TradingEnvironment(gym.Env):
         reward = 0
         trade_return = 0
 
-        # DECISION GATE
-        transformer_up_confidence = self.current_pred[1]
+        # CRITICAL FIX: Index 2 represents UP class. Index 1 was NEUTRAL.
+        transformer_up_confidence = self.current_pred[2]
 
         if action == 1: # BUY
             if self.position == 0:
                 if transformer_up_confidence >= 0.65:
-                    stop_loss = self.risk_manager.calculate_atr_stop_loss(price, risk_percent=current_atr/price)
+                    stop_loss = self.risk_manager.calculate_atr_stop_loss(price, current_atr)
                     size = self.risk_manager.calculate_position_size(price, stop_loss)
                     
                     if size > 0:
@@ -126,19 +126,17 @@ class TradingEnvironment(gym.Env):
                 pnl = self.position * (price - self.entry_price)
                 self.risk_manager.update_balance(self.risk_manager.balance + pnl)
                 
-                # Update Peak Balance for Drawdown checking
                 if self.risk_manager.balance > self.peak_balance:
                     self.peak_balance = self.risk_manager.balance
                 
                 self.position = 0
                 reward -= self.transaction_cost
 
-        # REWARD SHAPING: Drawdown Penalty
+        # REWARD SHAPING
         current_drawdown = (self.peak_balance - self.risk_manager.balance) / self.peak_balance
-        if current_drawdown > 0.02: # If drawdown exceeds 2%
-            reward -= (current_drawdown * 15) # Harsh penalty to discourage holding losers
+        if current_drawdown > 0.02: 
+            reward -= (current_drawdown * 15) 
             
-        # STABILITY BONUS
         if self.position > 0:
             unrealized_return = (price - self.entry_price) / self.entry_price
             if unrealized_return > 0:

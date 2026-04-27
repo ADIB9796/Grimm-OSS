@@ -46,7 +46,6 @@ class DQN(nn.Module):
         return self.network(x)
 
 class RLAgent:
-    # Added batch_size and epsilon_decay so Optuna kwargs don't crash
     def __init__(self, state_size, action_size, lr=1e-4, gamma=0.99, epsilon_decay=0.995, batch_size=64):
         self.state_size = state_size
         self.action_size = action_size
@@ -68,7 +67,6 @@ class RLAgent:
         self.step_count = 0
 
     def act(self, state):
-        """Returns action integer for standard Gym environments."""
         if np.random.rand() <= self.epsilon:
             return random.randrange(self.action_size)
         
@@ -83,6 +81,10 @@ class RLAgent:
             action = 0
 
         return action
+
+    # CRITICAL FIX: Added remember method
+    def remember(self, state, action, reward, next_state, done):
+        self.memory.add((state, action, reward, next_state, done))
 
     def replay(self):
         if len(self.memory.memory) < self.batch_size: 
@@ -122,10 +124,8 @@ class RLAgent:
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
     def save(self, filepath):
-        """Saves the DQN model weights."""
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         torch.save(self.model.state_dict(), filepath)
         
     def load(self, filepath):
-        """Loads the DQN model weights."""
         self.model.load_state_dict(torch.load(filepath, map_location=self.device, weights_only=True))

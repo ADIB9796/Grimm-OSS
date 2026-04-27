@@ -5,15 +5,11 @@ from src.ai.rl_agent import RLAgent
 from src.data.data_manager import DataManager
 
 def walk_forward_objective(trial, data):
-    # Hyperparameters
     lr = trial.suggest_float("lr", 1e-5, 1e-3, log=True)
     gamma = trial.suggest_float("gamma", 0.90, 0.99)
     batch_size = trial.suggest_categorical("batch_size", [32, 64, 128])
     epsilon_decay = trial.suggest_float("epsilon_decay", 0.99, 0.999)
 
-    # --- 2-FOLD ANCHORED WALK-FORWARD SETUP ---
-    # Fold 1: Train on 0-50%, Validate on 50-75%
-    # Fold 2: Train on 0-75%, Validate on 75-100%
     size = len(data)
     folds = [
         (data.iloc[0 : int(size*0.5)], data.iloc[int(size*0.5) : int(size*0.75)]),
@@ -48,7 +44,6 @@ def walk_forward_objective(trial, data):
             
             agent.update_epsilon()
 
-            # PRUNING: Using Optuna's built-in logic + manual safety at ep 25
             if e == 25 and episode_reward < -500:
                 raise optuna.TrialPruned()
             
@@ -56,7 +51,7 @@ def walk_forward_objective(trial, data):
             if trial.should_prune():
                 raise optuna.TrialPruned()
 
-        # --- VALIDATION (Out-of-Sample) ---
+        # Validation
         state, _ = val_env.reset()
         done = False
         val_reward = 0
@@ -68,20 +63,17 @@ def walk_forward_objective(trial, data):
         
         fold_rewards.append(val_reward)
             
-    return np.mean(fold_rewards) # Average reward across both folds
+    return np.mean(fold_rewards)
 
 def run_optimization(data, n_trials=50):
     print(f"[INFO] Initializing 2-Fold Walk-Forward Optimization on T4 GPU...")
-    # MedianPruner helps kill bad hyperparameter sets early
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=15)
     study = optuna.create_study(direction="maximize", pruner=pruner)
     study.optimize(lambda trial: walk_forward_objective(trial, data), n_trials=n_trials)
     
-    print("\nBEST PARAMS FOUND:")
-    print(study.best_params)
     return study.best_params
 
 if __name__ == "__main__":
     dm = DataManager()
-    data = dm.get_crypto_data("kraken", "BTC/USD", "1h", 3000)
+    data = dm.get_crypto_data("kraken", "BTC/USD", "1h", 4000)
     run_optimization(data)

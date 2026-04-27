@@ -6,26 +6,26 @@ from src.ai.rl_agent import RLAgent
 from src.ai.optuna_tuner import run_optimization
 
 def main():
-    # 1. SETUP DATA
     print("\n[1/3] Loading Market Data...")
     manager = DataManager()
     
+    # ENHANCEMENT: Fetch 4000 bars for deeper learning and validation
     data = manager.get_crypto_data(
         symbol="BTC/USD",
         exchange="kraken",
         timeframe="1h",
-        limit=2500 
+        limit=4000 
     )
 
     if data.empty:
         print("[ERROR] Failed to fetch data. Exiting.")
         return
 
-    train_data = data.iloc[:-500]
+    # Hold out the last 1000 bars for final Backtest engine. Train on first 3000.
+    train_data = data.iloc[:-1000]
 
-    # 2. HYPERPARAMETER TUNING STAGE
     print("\n[2/3] Running Optuna Optimization...")
-    print("      (This will evaluate 50 different configurations across 10,000 total episodes)")
+    print("      (Evaluating configurations across Walk-Forward folds)")
     
     best_params = run_optimization(train_data) 
 
@@ -34,7 +34,6 @@ def main():
     print(f"   Best Parameters Found: {best_params}")
     print("="*50)
 
-    # 3. FINAL TRAINING STAGE
     print("\n[3/3] STARTING FINAL TRAINING...")
     
     env = TradingEnvironment(train_data)
@@ -56,8 +55,6 @@ def main():
 
         while not done:
             action = agent.act(state) 
-            
-            # Using standard 5-tuple Gymnasium return
             next_state, reward, done, truncated, info = env.step(action) 
             
             agent.remember(state, action, reward, next_state, done) 
@@ -71,7 +68,6 @@ def main():
         if (e + 1) % 10 == 0: 
             print(f"Episode {e+1:04d}/{episodes} | Reward: {total_reward:6.2f} | Epsilon: {agent.epsilon:.4f}") 
 
-    # Agent now has the native save function
     agent.save("models/rl_trading_model.pth")
     print("\nTRAINING FINISHED!")
     print("      Model saved to models/rl_trading_model.pth")
