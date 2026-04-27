@@ -4,12 +4,14 @@ import torch.optim as optim
 import numpy as np
 from src.data.data_manager import DataManager
 from src.models.price_predictor import PriceTransformer
-from src.models.dataset import create_sequences
+from src.data.dataset import create_sequences
 
 def train():
     print("[1/4] Fetching Market Data...")
     dm = DataManager()
-    df = dm.get_crypto_data("kraken", "BTC/USD", "1h", 3000)
+    
+    # FIX 1: Switched from Kraken to Binance for deep historical access
+    df = dm.get_crypto_data("binance", "BTC/USDT", "1h", 3500)
     
     print(f"[INFO] Retrieved {len(df)} historical bars from DataManager.")
     
@@ -18,14 +20,15 @@ def train():
         return
 
     # Normalize Data
-    data_values = df.values
+    data_values = df.iloc[:, :10].values 
     data_mean = np.mean(data_values, axis=0)
     data_std = np.std(data_values, axis=0) + 1e-8
     normalized_data = (data_values - data_mean) / data_std
 
     print("[2/4] Building Sequences (Seq Length: 50)...")
-    # Using the unified dataset.py logic
-    X, y = create_sequences(normalized_data, seq_len=50, threshold=0.002)
+    
+    # FIX 2: Increased threshold to 0.5% to bring back the "Neutral" class
+    X, y = create_sequences(normalized_data, seq_len=50, threshold=0.005)
     
     # Calculate Class Weights
     unique, counts = np.unique(y, return_counts=True)
@@ -43,11 +46,12 @@ def train():
     print(f"      Using device: {device}")
     class_weights = class_weights.to(device)
     
-    model = PriceTransformer(input_size=10).to(device)
+    # Updated hyperparams to match the new robust predictor
+    model = PriceTransformer(input_size=10, d_model=128, nhead=8, num_layers=3).to(device)
     
     criterion = nn.CrossEntropyLoss(weight=class_weights)
-    # Added weight_decay (L2 Regularization) to prevent overfitting
-    optimizer = optim.Adam(model.parameters(), lr=0.0003, weight_decay=1e-5) 
+    optimizer = optim.AdamW(model.parameters(), lr=0.0005, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.5)
 
     epochs = 40 
     batch_size = 64
@@ -57,8 +61,6 @@ def train():
     
     for epoch in range(epochs):
         epoch_loss = 0
-        
-        # TWEAK: Shuffle the dataset every epoch to prevent pattern memorization
         permutation = torch.randperm(X_tensor.size()[0])
         
         for i in range(0, len(X_tensor), batch_size):
@@ -71,15 +73,15 @@ def train():
             loss = criterion(outputs, batch_y)
             loss.backward()
             
-            # TWEAK: Gradient Clipping to prevent "loss spikes"
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             
             optimizer.step()
             epoch_loss += loss.item() * len(batch_X)
             
+        scheduler.step()
         avg_loss = epoch_loss / len(X_tensor)
         if (epoch + 1) % 5 == 0:
-            print(f"      Epoch {epoch+1:02d}/{epochs} | Loss: {avg_loss:.4f}")
+            print(f"      Epoch {epoch+1:02d}/{epochs} | Loss: {avg_loss:.4f} | LR: {optimizer.param_groups[0]['lr']:.6f}")
 
     torch.save(model.state_dict(), "models/price_model.pth")
     print("[4/4] Training Complete. Model saved to models/price_model.pth")
