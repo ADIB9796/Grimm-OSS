@@ -3,22 +3,27 @@ import numpy as np
 class RiskManager:
     """
     Handles risk management, position sizing via Kelly Criterion, 
-    and capital protection across multi-asset classes.
+    and capital protection adapted for HIGH LEVERAGE brokers (Exness).
     """
     def __init__(
         self,
         balance: float,
         fractional_kelly: float = 0.1,
         max_drawdown: float = 0.20,
-        max_position_size: float = 0.05
+        max_position_size_pct: float = 0.10, # Max total EXPOSURE, not margin
+        leverage: float = 1.0                # Added for Exness
     ):
         self.initial_balance = balance
         self.balance = balance
         self.fractional_kelly = fractional_kelly
         self.max_drawdown = max_drawdown
-        self.max_position_size = max_position_size
+        
+        # On Exness, exposure is king. We cap total exposure to 10% of account.
+        self.max_position_size_pct = max_position_size_pct 
+        self.leverage = leverage
+        
         self.peak_balance = balance
-        self.win_history = [] # Stores percentage returns of closed trades
+        self.win_history = [] 
 
     # -------------------------------------------------------------
     # PERFORMANCE TRACKING
@@ -34,21 +39,31 @@ class RiskManager:
 
     def calculate_b_ratio(self):
         """Calculates the Win/Loss ratio (average win / average loss)."""
-        wins = [x for x in self.win_history if x > 0]
-        losses = [abs(x) for x in self.win_history if x < 0]
+        if not self.win_history:
+            return 1.0 # Default starting ratio
+            
+        wins = [r for r in self.win_history if r > 0]
+        losses = [abs(r) for r in self.win_history if r < 0]
         
-        if not losses: return 2.0 # Default conservative ratio
-        avg_win = np.mean(wins) if wins else 0.001
-        avg_loss = np.mean(losses) if losses else 0.001
+        avg_win = np.mean(wins) if wins else 0.01
+        avg_loss = np.mean(losses) if losses else 0.01
+        
         return avg_win / avg_loss
 
+    def can_trade(self):
+        """Blocks trading if drawdown exceeds maximum allowed."""
+        if self.peak_balance == 0: return True
+        current_dd = (self.peak_balance - self.balance) / self.peak_balance
+        return current_dd < self.max_drawdown
+
     # -------------------------------------------------------------
-    # POSITION SIZING (KELLY CRITERION)
+    # POSITION SIZING (KELLY CRITERION - LEVERAGE ADJUSTED)
     # -------------------------------------------------------------
     def get_kelly_size(self, win_probability: float):
         """
-        Calculates optimal size using: f* = p - (1 - p) / b
-        p = win probability (from Transformer), b = Win/Loss ratio.
+        Calculates optimal margin allocation based on Kelly Criterion,
+        adjusted so that leveraged exposure doesn't blow the account.
+        Returns: Percentage of BALANCE to use as MARGIN.
         """
         if not self.can_trade():
             return 0.0
@@ -57,28 +72,29 @@ class RiskManager:
         p = win_probability
         q = 1 - p
         
-        # Kelly Formula
+        # Base Kelly Formula
         kelly_f = (b * p - q) / (b + 1e-8)
         
         if kelly_f <= 0:
             return 0.0
             
-        # Apply Fractional Kelly and hard cap
-        size = kelly_f * self.fractional_kelly
-        return min(size, self.max_position_size)
+        # 1. Get raw exposure size
+        target_exposure_pct = kelly_f * self.fractional_kelly
+        
+        # 2. Cap maximum exposure
+        target_exposure_pct = min(target_exposure_pct, self.max_position_size_pct)
+        
+        # 3. Translate Exposure into required Margin based on Leverage
+        # If we want 10% exposure on 50x leverage, we only need 0.2% margin
+        margin_pct = target_exposure_pct / self.leverage
+        
+        return margin_pct
 
     # -------------------------------------------------------------
-    # STOP-LOSS & DRAWDOWN
+    # STOP-LOSS
     # -------------------------------------------------------------
     def calculate_atr_stop_loss(self, entry_price, current_atr, multiplier=2.0, side='long'):
         """Sets dynamic stop loss based on ATR."""
         if side == 'long':
             return entry_price - (current_atr * multiplier)
         return entry_price + (current_atr * multiplier)
-
-    def current_drawdown(self):
-        if self.peak_balance == 0: return 0.0
-        return (self.peak_balance - self.balance) / self.peak_balance
-
-    def can_trade(self):
-        return self.current_drawdown() <= self.max_drawdown

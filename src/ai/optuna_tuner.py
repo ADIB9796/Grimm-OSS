@@ -31,11 +31,10 @@ def walk_forward_objective(trial, data):
         agent = RLAgent(state_size, action_size, lr=lr, gamma=gamma, 
                         epsilon_decay=epsilon_decay, batch_size=batch_size)
 
-        # 1. Search Phase: Short, aggressive training bursts
         episodes = 50 
+        recent_rewards = [] # Used for smoothing RL noise
         
         for e in range(episodes):
-            # 2. Deterministic Execution: Fixed seed
             state, _ = train_env.reset(seed=42)
             done = False
             episode_reward = 0
@@ -50,18 +49,35 @@ def walk_forward_objective(trial, data):
             
             agent.update_epsilon()
 
-            # 3. Heartbeat Logging
-            if (e + 1) % 10 == 0:
-                print(f"      [Trial {trial.number}] Fold {fold_idx+1} | Episode {e+1:02d}/{episodes} | Reward: {episode_reward:6.2f}")
+            # 1. Smooth the reward to prevent "lucky" spikes from bypassing the pruner
+            recent_rewards.append(episode_reward)
+            if len(recent_rewards) > 5:
+                recent_rewards.pop(0)
+            
+            avg_recent_reward = np.mean(recent_rewards)
 
-            trial.report(episode_reward, step=(fold_idx * episodes + e))
+            # Heartbeat Logging
+            if (e + 1) % 10 == 0:
+                print(f"      [Trial {trial.number}] Fold {fold_idx+1} | Episode {e+1:02d}/{episodes} | Raw Reward: {episode_reward:6.2f} | Avg: {avg_recent_reward:6.2f}")
+
+            # 2. Report smoothed average to Optuna
+            current_step = (fold_idx * episodes + e)
+            trial.report(avg_recent_reward, step=current_step)
+
+            # 3. Check Optuna's MedianPruner
             if trial.should_prune():
-                print(f"      [Trial {trial.number}] Pruned by MedianPruner.")
+                print(f"      [Trial {trial.number}] Pruned by MedianPruner at Episode {e+1}.")
+                raise optuna.TrialPruned()
+
+            # 4. Continuous Manual Emergency Stop
+            # If the agent is consistently losing heavily after episode 15, kill it.
+            if e >= 15 and avg_recent_reward < -1000:
+                print(f"      [Trial {trial.number}] Manual Prune: Critical loss trend detected (Avg: {avg_recent_reward:.2f}).")
                 raise optuna.TrialPruned()
 
         print(f"      [Trial {trial.number}] Fold {fold_idx+1}/{len(folds)} Internal Training Complete.")
 
-        # Validation
+        # Validation (No learning, pure exploitation)
         state, _ = val_env.reset(seed=42)
         done = False
         val_reward = 0
@@ -78,10 +94,10 @@ def walk_forward_objective(trial, data):
     return np.mean(fold_rewards)
 
 def run_optimization(data, n_trials=50):
-    print(f"[INFO] Initializing 2-Fold Walk-Forward Optimization")
+    print(f"[INFO] Initializing 2-Fold Walk-Forward Optimization on T4 GPU...")
     
-    # 4. Patient Pruning: Give the agent 25 episodes to learn the basics
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=25)
+    # Pruner kicks in at step 15. Because we smoothed the data, it's safer to check earlier.
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=15)
     
     study = optuna.create_study(direction="maximize", pruner=pruner)
     study.optimize(lambda trial: walk_forward_objective(trial, data), n_trials=n_trials)
