@@ -8,7 +8,7 @@ from src.risk.risk_manager import RiskManager
 from src.models.price_predictor import PriceTransformer
 
 class TradingEnvironment(gym.Env):
-    def __init__(self, data, initial_balance=10000, transaction_cost=0.0025):
+    def __init__(self, data, initial_balance=10000, transaction_cost=0.0015, is_training=False):
         super(TradingEnvironment, self).__init__()
         self.raw_data = data.copy()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -23,12 +23,17 @@ class TradingEnvironment(gym.Env):
         self.transaction_cost = transaction_cost
         self.data = self._prepare_features(self.raw_data)
         
-        # CRITICAL FIX: Safeguard against empty dataframes
         if len(self.data) == 0:
             raise ValueError("TradingEnvironment received empty data or data became too short after indicator calculation.")
         
         self.initial_balance = initial_balance
-        self.risk_manager = RiskManager(balance=initial_balance)
+        
+        # Pass is_training=True to enable the 10x leverage safety net
+        self.risk_manager = RiskManager(
+            balance=initial_balance, 
+            leverage=50.0, 
+            is_training=is_training
+        )
         self.peak_balance = initial_balance 
         
         self.seq_len = 50
@@ -105,26 +110,20 @@ class TradingEnvironment(gym.Env):
         price = self.raw_data.iloc[self.current_step + offset]["close"]
         current_atr = self.raw_data.iloc[self.current_step + offset]["atr"]
         
-        reward = 0
+        raw_reward = 0
         trade_return = 0
-
-        transformer_up_confidence = self.current_pred[2]
 
         if action == 1: # BUY
             if self.position == 0:
-                # Index 2 is the 'UP' probability from your Transformer
                 win_prob = self.current_pred[2] 
-        
-                if win_prob >= 0.65: # Confidence threshold
-                    # Use Kelly Criterion for dynamic sizing
+                if win_prob >= 0.65:
                     size = self.risk_manager.get_kelly_size(win_prob)
-            
                     if size > 0:
                         self.position = size 
                         self.entry_price = price
-                        reward -= self.transaction_cost
+                        raw_reward -= self.transaction_cost
                 else:
-                    action = 0 # VETO if model isn't confident enough
+                    action = 0 
 
         elif action == 2: # SELL
             if self.position > 0:
@@ -137,29 +136,37 @@ class TradingEnvironment(gym.Env):
                     self.peak_balance = self.risk_manager.balance
                 
                 self.position = 0
-                reward -= self.transaction_cost
+                raw_reward -= self.transaction_cost
+                
+        elif action == 0 and self.position == 0:
+            # INACTIVITY PENALTY: Prevent the AI from just holding cash forever to avoid Exness spreads
+            raw_reward -= 0.0001 
 
         # REWARD SHAPING
         current_drawdown = (self.peak_balance - self.risk_manager.balance) / self.peak_balance
         if current_drawdown > 0.02: 
-            reward -= (current_drawdown * 15) 
+            raw_reward -= (current_drawdown * 15) 
             
         if self.position > 0:
             unrealized_return = (price - self.entry_price) / self.entry_price
             if unrealized_return > 0:
-                reward += (unrealized_return * 0.1) 
+                raw_reward += (unrealized_return * 0.1) 
 
         self.returns.append(trade_return)
         
         if len(self.returns) > 10:
             mean = np.mean(self.returns)
             std = np.std(self.returns) + 1e-8
-            reward += mean / std
+            raw_reward += mean / std
         else:
-            reward += trade_return
+            raw_reward += trade_return
 
         self.current_step += 1
         if self.current_step >= len(self.data) - 1:
             done = True
             
-        return self._get_observation(), reward, done, False, {}
+        # CRITICAL FIX: Symmetric Log Scaling
+        # This turns a crazy leveraged loss of -1500 into a smooth -7.3
+        scaled_reward = np.sign(raw_reward) * np.log1p(np.abs(raw_reward))
+            
+        return self._get_observation(), scaled_reward, done, False, {}

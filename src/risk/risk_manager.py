@@ -11,16 +11,21 @@ class RiskManager:
         fractional_kelly: float = 0.1,
         max_drawdown: float = 0.20,
         max_position_size_pct: float = 0.10, # Max total EXPOSURE, not margin
-        leverage: float = 1.0                # Added for Exness
+        leverage: float = 1.0,               # Default Exness Leverage
+        is_training: bool = False            # SAFETY TOGGLE
     ):
         self.initial_balance = balance
         self.balance = balance
         self.fractional_kelly = fractional_kelly
         self.max_drawdown = max_drawdown
         
-        # On Exness, exposure is king. We cap total exposure to 10% of account.
         self.max_position_size_pct = max_position_size_pct 
         self.leverage = leverage
+        self.is_training = is_training
+        
+        # TRAINING MODE OVERRIDE: Cap leverage at 10x during learning phase
+        # so the agent isn't instantly liquidated by early random actions.
+        self.active_leverage = min(leverage, 10.0) if self.is_training else leverage
         
         self.peak_balance = balance
         self.win_history = [] 
@@ -84,9 +89,8 @@ class RiskManager:
         # 2. Cap maximum exposure
         target_exposure_pct = min(target_exposure_pct, self.max_position_size_pct)
         
-        # 3. Translate Exposure into required Margin based on Leverage
-        # If we want 10% exposure on 50x leverage, we only need 0.2% margin
-        margin_pct = target_exposure_pct / self.leverage
+        # 3. Translate Exposure into required Margin based on the ACTIVE Leverage
+        margin_pct = target_exposure_pct / self.active_leverage
         
         return margin_pct
 
