@@ -8,6 +8,7 @@ from src.risk.risk_manager import RiskManager
 from src.models.price_predictor import PriceTransformer
 
 class TradingEnvironment(gym.Env):
+    # Default is_training=False so production runs at 50x leverage automatically
     def __init__(self, data, initial_balance=10000, transaction_cost=0.0015, is_training=False):
         super(TradingEnvironment, self).__init__()
         self.raw_data = data.copy()
@@ -28,7 +29,7 @@ class TradingEnvironment(gym.Env):
         
         self.initial_balance = initial_balance
         
-        # Pass is_training=True to enable the 10x leverage safety net
+        # Passes the training flag to risk manager (True = 10x leverage, False = 50x)
         self.risk_manager = RiskManager(
             balance=initial_balance, 
             leverage=50.0, 
@@ -108,7 +109,6 @@ class TradingEnvironment(gym.Env):
         offset = len(self.raw_data) - len(self.data)
         
         price = self.raw_data.iloc[self.current_step + offset]["close"]
-        current_atr = self.raw_data.iloc[self.current_step + offset]["atr"]
         
         raw_reward = 0
         trade_return = 0
@@ -116,7 +116,8 @@ class TradingEnvironment(gym.Env):
         if action == 1: # BUY
             if self.position == 0:
                 win_prob = self.current_pred[2] 
-                if win_prob >= 0.65:
+                # Loosened threshold so the agent learns faster
+                if win_prob >= 0.60:
                     size = self.risk_manager.get_kelly_size(win_prob)
                     if size > 0:
                         self.position = size 
@@ -138,19 +139,17 @@ class TradingEnvironment(gym.Env):
                 self.position = 0
                 raw_reward -= self.transaction_cost
                 
-        elif action == 0 and self.position == 0:
-            # INACTIVITY PENALTY: Prevent the AI from just holding cash forever to avoid Exness spreads
-            raw_reward -= 0.0001 
+        # INACTIVITY PENALTY REMOVED entirely to stop early bleeding
 
         # REWARD SHAPING
         current_drawdown = (self.peak_balance - self.risk_manager.balance) / self.peak_balance
         if current_drawdown > 0.02: 
-            raw_reward -= (current_drawdown * 15) 
+            raw_reward -= (current_drawdown * 10) # Reduced from 15 to 10
             
         if self.position > 0:
             unrealized_return = (price - self.entry_price) / self.entry_price
             if unrealized_return > 0:
-                raw_reward += (unrealized_return * 0.1) 
+                raw_reward += (unrealized_return * 0.2) # Increased from 0.1 to 0.2 to encourage holding
 
         self.returns.append(trade_return)
         
@@ -166,7 +165,6 @@ class TradingEnvironment(gym.Env):
             done = True
             
         # CRITICAL FIX: Symmetric Log Scaling
-        # This turns a crazy leveraged loss of -1500 into a smooth -7.3
         scaled_reward = np.sign(raw_reward) * np.log1p(np.abs(raw_reward))
             
         return self._get_observation(), scaled_reward, done, False, {}
