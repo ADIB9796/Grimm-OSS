@@ -29,7 +29,7 @@ def main():
         symbol="BTC/USDT",
         exchange="kucoin",
         timeframe="1h",
-        limit=4000 
+        limit=6000 
     )
 
     if data.empty:

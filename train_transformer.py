@@ -12,7 +12,7 @@ def train():
     dm = DataManager()
     
     # Using KuCoin for deep historical access
-    df = dm.get_crypto_data("kucoin", "BTC/USDT", "1h", 3500)
+    df = dm.get_crypto_data("kucoin", "BTC/USDT", "1h", 6000)
     
     print(f"[INFO] Retrieved {len(df)} historical bars from DataManager.")
     
@@ -59,8 +59,8 @@ def train():
     model = PriceTransformer(input_size=10, d_model=128, nhead=8, num_layers=3).to(device)
     
     criterion = nn.CrossEntropyLoss(weight=class_weights)
-    optimizer = optim.AdamW(model.parameters(), lr=0.0005, weight_decay=1e-4)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=15, gamma=0.5)
+    optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=1e-2)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
     # --- CRITICAL UPDATE: INCREASED EPOCHS & EARLY STOPPING ---
     epochs = 100 
