@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pandas as pd
 from src.data.data_manager import DataManager
@@ -5,11 +6,25 @@ from src.ai.trading_env import TradingEnvironment
 from src.ai.rl_agent import RLAgent
 from src.ai.optuna_tuner import run_optimization
 
+# ==========================================
+# CONFIGURATION TOGGLES
+# ==========================================
+USE_OPTUNA = False  # Set to True to search for new params, False to use Best DNA
+CHECKPOINT_PATH = "models/rl_checkpoint.pth"
+FINAL_MODEL_PATH = "models/rl_trading_model.pth"
+
+# Trial 22 "Sharpe 6.00" Winner
+BEST_DNA = {
+    'lr': 1.700933528056293e-05, 
+    'gamma': 0.9787113384975228, 
+    'batch_size': 64, 
+    'epsilon_decay': 0.9913064056788868
+}
+
 def main():
     print("\n[1/3] Loading Market Data...")
     manager = DataManager()
     
-    # CRITICAL FIX: Changed to KuCoin and BTC/USDT to bypass Kraken's 720-bar limit.
     data = manager.get_crypto_data(
         symbol="BTC/USDT",
         exchange="kucoin",
@@ -21,7 +36,6 @@ def main():
         print("[ERROR] Failed to fetch data. Exiting.")
         return
 
-    # CRITICAL FIX: Safety check to ensure we have enough data before slicing
     if len(data) <= 1500:
         print(f"[ERROR] Fetched only {len(data)} bars. Need more than 1500 for a proper split.")
         return
@@ -29,15 +43,17 @@ def main():
     # Hold out the last 1000 bars for final Backtest engine. Train on the rest.
     train_data = data.iloc[:-1000]
 
-    print("\n[2/3] Running Optuna Optimization...")
-    print("      (Evaluating configurations across Walk-Forward folds)")
-    
-    best_params = run_optimization(train_data) 
-
-    print("\n" + "="*50)
-    print("OPTUNA STAGE COMPLETE")
-    print(f"   Best Parameters Found: {best_params}")
-    print("="*50)
+    print("\n[2/3] Hyperparameter Configuration...")
+    if USE_OPTUNA:
+        print("      Running Optuna Optimization...")
+        best_params = run_optimization(train_data) 
+        print("\n" + "="*50)
+        print("OPTUNA STAGE COMPLETE")
+        print(f"   Best Parameters Found: {best_params}")
+        print("="*50)
+    else:
+        print("      Skipping Optuna. Loading 'Turbo' DNA...")
+        best_params = BEST_DNA
 
     print("\n[3/3] STARTING FINAL TRAINING...")
     
@@ -52,8 +68,15 @@ def main():
     )
 
     episodes = 2000 
+    start_episode = 0
 
-    for e in range(episodes):
+    # --- CHECKPOINT LOADING LOGIC ---
+    if os.path.exists(CHECKPOINT_PATH):
+        print(f"\n[INFO] Found existing checkpoint at {CHECKPOINT_PATH}")
+        start_episode = agent.load_checkpoint(CHECKPOINT_PATH)
+        print(f"       Resuming from Episode {start_episode} with Epsilon: {agent.epsilon:.4f}")
+
+    for e in range(start_episode, episodes):
         state, _ = env.reset() 
         total_reward = 0
         done = False
@@ -73,9 +96,18 @@ def main():
         if (e + 1) % 10 == 0: 
             print(f"Episode {e+1:04d}/{episodes} | Reward: {total_reward:6.2f} | Epsilon: {agent.epsilon:.4f}") 
 
-    agent.save("models/rl_trading_model.pth")
+        # --- CHECKPOINT SAVING LOGIC (Every 50 episodes) ---
+        if (e + 1) % 50 == 0:
+            agent.save_checkpoint(CHECKPOINT_PATH, e + 1)
+            print(f"      [System] Checkpoint saved at episode {e+1}")
+
+    # Save final production model and clean up checkpoint
+    agent.save(FINAL_MODEL_PATH)
+    if os.path.exists(CHECKPOINT_PATH):
+        os.remove(CHECKPOINT_PATH)
+        
     print("\nTRAINING FINISHED!")
-    print("      Model saved to models/rl_trading_model.pth")
+    print(f"      Production Model saved to {FINAL_MODEL_PATH}")
 
 if __name__ == "__main__":
     main()

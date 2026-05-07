@@ -76,13 +76,11 @@ class RLAgent:
             
         action = int(np.argmax(q_vals))
         
-        # Q-value advantage check
         if action != 0 and (q_vals[action] - q_vals[0]) < 0.15:
             action = 0
 
         return action
 
-    # CRITICAL FIX: Added remember method
     def remember(self, state, action, reward, next_state, done):
         self.memory.add((state, action, reward, next_state, done))
 
@@ -123,9 +121,33 @@ class RLAgent:
     def update_epsilon(self):
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
+    # --- STANDARD SAVE/LOAD (For Production) ---
     def save(self, filepath):
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         torch.save(self.model.state_dict(), filepath)
         
     def load(self, filepath):
         self.model.load_state_dict(torch.load(filepath, map_location=self.device, weights_only=True))
+
+    # --- CHECKPOINT SAVE/LOAD (For Training Resilience) ---
+    def save_checkpoint(self, filepath, episode):
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        checkpoint = {
+            'episode': episode,
+            'epsilon': self.epsilon,
+            'step_count': self.step_count,
+            'model_state_dict': self.model.state_dict(),
+            'target_model_state_dict': self.target_model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict()
+        }
+        torch.save(checkpoint, filepath)
+
+    def load_checkpoint(self, filepath):
+        # weights_only=False is required here because we are loading floats/ints alongside tensors
+        checkpoint = torch.load(filepath, map_location=self.device, weights_only=False)
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.target_model.load_state_dict(checkpoint['target_model_state_dict'])
+        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        self.epsilon = checkpoint['epsilon']
+        self.step_count = checkpoint['step_count']
+        return checkpoint['episode']
