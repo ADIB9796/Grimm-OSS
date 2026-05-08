@@ -11,7 +11,7 @@ def train():
     print("[1/4] Fetching Market Data...")
     dm = DataManager()
     
-    # Using KuCoin for deep historical access
+    # Using KuCoin for deep historical access (6000 limit)
     df = dm.get_crypto_data("kucoin", "BTC/USDT", "1h", 6000)
     
     print(f"[INFO] Retrieved {len(df)} historical bars from DataManager.")
@@ -39,8 +39,7 @@ def train():
     class_weights = torch.FloatTensor(class_weights / class_weights.sum() * 3.0) 
     print(f"      Applied Weights: {class_weights.tolist()}")
 
-    # --- CRITICAL UPDATE: TIME-SERIES TRAIN/VAL SPLIT ---
-    # We use the first 85% for training and the last 15% as the "Final Exam"
+    # 85% Train, 15% Validation split
     split_idx = int(len(X) * 0.85)
     X_train, X_val = X[:split_idx], X[split_idx:]
     y_train, y_val = y[:split_idx], y[split_idx:]
@@ -51,7 +50,7 @@ def train():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"      Using device: {device}")
     
-    # Move validation tensors to device immediately
+    # Move validation tensors to device
     X_val_tensor = torch.FloatTensor(X_val).to(device)
     y_val_tensor = torch.LongTensor(y_val).to(device)
     class_weights = class_weights.to(device)
@@ -62,7 +61,6 @@ def train():
     optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=1e-2)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
-    # --- CRITICAL UPDATE: INCREASED EPOCHS & EARLY STOPPING ---
     epochs = 100 
     batch_size = 64
     patience = 15
@@ -96,7 +94,6 @@ def train():
             optimizer.step()
             epoch_train_loss += loss.item() * len(batch_X)
             
-        scheduler.step()
         avg_train_loss = epoch_train_loss / len(X_train_tensor)
         
         # 2. Validation Phase
@@ -105,11 +102,13 @@ def train():
             val_outputs = model(X_val_tensor)
             val_loss = criterion(val_outputs, y_val_tensor).item()
             
-        # 3. Early Stopping & Best Model Saving Logic
+        # FIX: Step the scheduler with the validation loss
+        scheduler.step(val_loss)
+            
+        # 3. Early Stopping & Best Model Logic
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
-            # Save ONLY when the validation loss hits a new low
             torch.save(model.state_dict(), save_path)
             status_flag = " [NEW BEST - SAVED]"
         else:
