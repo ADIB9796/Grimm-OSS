@@ -87,7 +87,7 @@ def train():
 
     # Ensure output directory exists
     os.makedirs("models", exist_ok=True)
-    save_path = "models/price_model_v2.pth"
+    save_path = "models/BTC_price_model.pth"
 
     print(f"[3/5] Training Diamond-Tier Transformer (Train: {len(X_train)}, Val: {len(X_val)})...")
     
@@ -150,14 +150,14 @@ def train():
     
     # CRITICAL UPDATE: Dummy input expanded to 56 features to map correctly to L2 architecture
     dummy_input = torch.randn(1, 50, 56)
-    onnx_path = "models/price_model_full_precision.onnx"
+    onnx_path = "models/BTC_price_model.onnx"
     
     torch.onnx.export(
         model, 
         dummy_input, 
         onnx_path, 
         export_params=True, 
-        opset_version=11, 
+        opset_version=18, 
         do_constant_folding=True, # Merges math operations for speed
         input_names=['input'], 
         output_names=['output'],
