@@ -19,19 +19,21 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:, :x.size(1), :]
 
 class PriceTransformer(nn.Module):
-    def __init__(self, input_size=10, d_model=128, nhead=8, num_layers=3, dropout=0.3):
+    # input_size updated to 56 (28 features from 1h + 28 features from 4h L2 Depth integration)
+    # d_model bumped to 256 to accommodate the wider data stream
+    def __init__(self, input_size=56, d_model=256, nhead=8, num_layers=4, dropout=0.3):
         super(PriceTransformer, self).__init__()
         
         # 1. Feature Projection
         self.input_proj = nn.Linear(input_size, d_model)
         
-        # 2. Input LayerNorm (CRITICAL FIX)
+        # 2. Input LayerNorm
         self.norm_input = nn.LayerNorm(d_model)
         
         # 3. Positional Encoding
         self.pos_encoder = PositionalEncoding(d_model)
         
-        # 4. Transformer (Pre-LayerNorm for financial stability)
+        # 4. Transformer
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
@@ -39,19 +41,20 @@ class PriceTransformer(nn.Module):
             dropout=dropout,
             norm_first=True
         )
-        # Added enable_nested_tensor=False to silence PyTorch console warnings
         self.transformer = nn.TransformerEncoder(
             encoder_layer, 
             num_layers=num_layers,
             enable_nested_tensor=False
         )
 
-        # 5. Classifier
+        # 5. Classifier (Scaled up for 256 dimensions)
         self.fc = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
+            nn.Linear(d_model, d_model),
             nn.LeakyReLU(0.2),
             nn.Dropout(dropout),
-            nn.LayerNorm(d_model // 2),
+            nn.LayerNorm(d_model),
+            nn.Linear(d_model, d_model // 2),
+            nn.LeakyReLU(0.2),
             nn.Linear(d_model // 2, 3) # 0: Down, 1: Neutral, 2: Up
         )
 

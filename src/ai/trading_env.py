@@ -8,13 +8,14 @@ from src.risk.risk_manager import RiskManager
 from src.models.price_predictor import PriceTransformer
 
 class TradingEnvironment(gym.Env):
-    # Default is_training=False so production runs at 50x leverage automatically
     def __init__(self, data, initial_balance=10000, transaction_cost=0.0015, is_training=False):
         super(TradingEnvironment, self).__init__()
         self.raw_data = data.copy()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # --- CALCULATE RAW ATR FOR RISK MANAGER ---
+        # Note: raw_data no longer has high/low directly, it has high, low, high_4h, low_4h
+        # We compute ATR on the 1h timeframe (first few columns)
         high_low = self.raw_data['high'] - self.raw_data['low']
         high_close = np.abs(self.raw_data['high'] - self.raw_data['close'].shift(1))
         low_close = np.abs(self.raw_data['low'] - self.raw_data['close'].shift(1))
@@ -22,14 +23,14 @@ class TradingEnvironment(gym.Env):
         self.raw_data['atr'] = true_range.rolling(14).mean() 
         
         self.transaction_cost = transaction_cost
+        
+        # Prepare features adds extra context indicators to the end of the 56 base columns
         self.data = self._prepare_features(self.raw_data)
         
         if len(self.data) == 0:
-            raise ValueError("TradingEnvironment received empty data or data became too short after indicator calculation.")
+            raise ValueError("TradingEnvironment received empty data.")
         
         self.initial_balance = initial_balance
-        
-        # Passes the training flag to risk manager (True = 10x leverage, False = 50x)
         self.risk_manager = RiskManager(
             balance=initial_balance, 
             leverage=50.0, 
@@ -38,12 +39,14 @@ class TradingEnvironment(gym.Env):
         self.peak_balance = initial_balance 
         
         self.seq_len = 50
-        self.price_model = PriceTransformer(input_size=10).to(self.device)
+        
+        # CRITICAL UPDATE: Load Diamond-Tier architecture
+        self.price_model = PriceTransformer(input_size=56, d_model=256, nhead=8, num_layers=4).to(self.device)
         
         try:
-            self.price_model.load_state_dict(torch.load("models/price_model.pth", map_location=self.device, weights_only=True))
+            self.price_model.load_state_dict(torch.load("models/price_model_v2.pth", map_location=self.device, weights_only=True))
         except FileNotFoundError:
-            pass
+            print("[WARN] Transformer weights not found. Running with uninitialized 'eyes'.")
             
         self.price_model.eval()
         self.history = []
@@ -59,7 +62,7 @@ class TradingEnvironment(gym.Env):
         df["log_return"] = np.log(df["close"] / df["close"].shift(1))
         df["ma_fast"] = df["close"].rolling(5).mean()
         df["ma_slow"] = df["close"].rolling(20).mean()
-        df["volatility"] = df["log_return"].rolling(10).std()
+        df["volatility_env"] = df["log_return"].rolling(10).std()
         df = df.dropna()
 
         for col in df.columns:
@@ -91,7 +94,9 @@ class TradingEnvironment(gym.Env):
 
     def _get_observation(self):
         full_state = self.data.iloc[self.current_step].values.astype(np.float32)
-        transformer_input = full_state[:10] 
+        
+        # CRITICAL UPDATE: Extract exactly the first 56 columns for the L2 Transformer
+        transformer_input = full_state[:56] 
         
         self.history.append(transformer_input)
         if len(self.history) > self.seq_len:
@@ -113,10 +118,9 @@ class TradingEnvironment(gym.Env):
         raw_reward = 0
         trade_return = 0
 
-        if action == 1: # BUY
+        if action == 1: 
             if self.position == 0:
                 win_prob = self.current_pred[2] 
-                # Loosened threshold so the agent learns faster
                 if win_prob >= 0.60:
                     size = self.risk_manager.get_kelly_size(win_prob)
                     if size > 0:
@@ -126,7 +130,7 @@ class TradingEnvironment(gym.Env):
                 else:
                     action = 0 
 
-        elif action == 2: # SELL
+        elif action == 2: 
             if self.position > 0:
                 trade_return = (price - self.entry_price) / self.entry_price
                 pnl = self.position * (price - self.entry_price)
@@ -139,17 +143,14 @@ class TradingEnvironment(gym.Env):
                 self.position = 0
                 raw_reward -= self.transaction_cost
                 
-        # INACTIVITY PENALTY REMOVED entirely to stop early bleeding
-
-        # REWARD SHAPING
         current_drawdown = (self.peak_balance - self.risk_manager.balance) / self.peak_balance
         if current_drawdown > 0.02: 
-            raw_reward -= (current_drawdown * 10) # Reduced from 15 to 10
+            raw_reward -= (current_drawdown * 10) 
             
         if self.position > 0:
             unrealized_return = (price - self.entry_price) / self.entry_price
             if unrealized_return > 0:
-                raw_reward += (unrealized_return * 0.2) # Increased from 0.1 to 0.2 to encourage holding
+                raw_reward += (unrealized_return * 0.2) 
 
         self.returns.append(trade_return)
         
@@ -164,7 +165,6 @@ class TradingEnvironment(gym.Env):
         if self.current_step >= len(self.data) - 1:
             done = True
             
-        # CRITICAL FIX: Symmetric Log Scaling
         scaled_reward = np.sign(raw_reward) * np.log1p(np.abs(raw_reward))
             
         return self._get_observation(), scaled_reward, done, False, {}

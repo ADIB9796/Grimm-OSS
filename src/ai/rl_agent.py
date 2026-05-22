@@ -33,11 +33,12 @@ class PrioritizedReplayBuffer:
 class DQN(nn.Module):
     def __init__(self, state_size, action_size):
         super(DQN, self).__init__()
+        # Widen network to handle 60+ dimensional state vector
         self.network = nn.Sequential(
-            nn.Linear(state_size, 256),
-            nn.LayerNorm(256), 
+            nn.Linear(state_size, 512),
+            nn.LayerNorm(512), 
             nn.ReLU(),
-            nn.Linear(256, 256),
+            nn.Linear(512, 256),
             nn.LayerNorm(256),
             nn.ReLU(),
             nn.Linear(256, action_size)
@@ -121,7 +122,6 @@ class RLAgent:
     def update_epsilon(self):
         self.epsilon = max(self.epsilon_min, self.epsilon * self.epsilon_decay)
 
-    # --- STANDARD SAVE/LOAD (For Production) ---
     def save(self, filepath):
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         torch.save(self.model.state_dict(), filepath)
@@ -129,7 +129,6 @@ class RLAgent:
     def load(self, filepath):
         self.model.load_state_dict(torch.load(filepath, map_location=self.device, weights_only=True))
 
-    # --- CHECKPOINT SAVE/LOAD (For Training Resilience) ---
     def save_checkpoint(self, filepath, episode):
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         checkpoint = {
@@ -143,7 +142,6 @@ class RLAgent:
         torch.save(checkpoint, filepath)
 
     def load_checkpoint(self, filepath):
-        # weights_only=False is required here because we are loading floats/ints alongside tensors
         checkpoint = torch.load(filepath, map_location=self.device, weights_only=False)
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.target_model.load_state_dict(checkpoint['target_model_state_dict'])

@@ -2,33 +2,49 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import numpy as np
+import pandas as pd
 import os
 from src.data.data_manager import DataManager
 from src.models.price_predictor import PriceTransformer
 from src.models.dataset import create_sequences
 
 def train():
-    print("[1/4] Fetching Market Data...")
+    print("[1/5] Fetching Multi-Timeframe Market Data (Including L2 Depth Synthesis)...")
     dm = DataManager()
     
-    # Using KuCoin for deep historical access (6000 limit)
-    df = dm.get_crypto_data("kucoin", "BTC/USDT", "1h", 6000)
+    # Target timeframe
+    df_1h = dm.get_crypto_data("kucoin", "BTC/USDT", "1h", 6000)
+    # Peripheral vision timeframe
+    df_4h = dm.get_crypto_data("kucoin", "BTC/USDT", "4h", 2000)
     
-    print(f"[INFO] Retrieved {len(df)} historical bars from DataManager.")
-    
-    if len(df) < 100:
-        print("[ERROR] Not enough data fetched to train. Exiting.")
+    if df_1h.empty or df_4h.empty:
+        print("[ERROR] Failed to fetch sufficient data. Exiting.")
         return
 
-    # Normalize Data
-    data_values = df.iloc[:, :10].values 
+    # Prepare 4h data for merging
+    df_4h = df_4h.add_suffix('_4h')
+    df_4h = df_4h.rename(columns={'timestamp_4h': 'timestamp'})
+    
+    # Merge on timestamp using forward-fill for the 4h context
+    df_merged = pd.merge_asof(
+        df_1h.sort_values('timestamp'),
+        df_4h.sort_values('timestamp'),
+        on='timestamp',
+        direction='backward'
+    )
+    
+    df_merged.dropna(inplace=True)
+    print(f"[INFO] Synced {len(df_merged)} bars across timeframes.")
+
+    # Drop timestamp before sending to the model, leaving 56 distinct features
+    data_values = df_merged.drop(columns=['timestamp']).values 
     data_mean = np.mean(data_values, axis=0)
     data_std = np.std(data_values, axis=0) + 1e-8
     normalized_data = (data_values - data_mean) / data_std
 
-    print("[2/4] Building Sequences (Seq Length: 50)...")
+    print("[2/5] Building Volatility-Scaled Sequences (Seq Length: 50)...")
     
-    X, y = create_sequences(normalized_data, seq_len=50, threshold=0.005)
+    X, y = create_sequences(normalized_data, seq_len=50)
     
     # Calculate Class Weights based on entire dataset
     unique, counts = np.unique(y, return_counts=True)
@@ -55,9 +71,11 @@ def train():
     y_val_tensor = torch.LongTensor(y_val).to(device)
     class_weights = class_weights.to(device)
     
-    model = PriceTransformer(input_size=10, d_model=128, nhead=8, num_layers=3).to(device)
+    # Initialize model with 56 input features and 256 d_model capacity
+    model = PriceTransformer(input_size=56, d_model=256, nhead=8, num_layers=4).to(device)
     
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    # DIAMOND FEATURE: Label Smoothing 0.1
+    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
     optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=1e-2)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
 
@@ -69,9 +87,9 @@ def train():
 
     # Ensure output directory exists
     os.makedirs("models", exist_ok=True)
-    save_path = "models/price_model.pth"
+    save_path = "models/price_model_v2.pth"
 
-    print(f"[3/4] Training PriceTransformer (Train: {len(X_train)}, Val: {len(X_val)})...")
+    print(f"[3/5] Training Diamond-Tier Transformer (Train: {len(X_train)}, Val: {len(X_val)})...")
     
     for epoch in range(epochs):
         # 1. Training Phase
@@ -102,7 +120,6 @@ def train():
             val_outputs = model(X_val_tensor)
             val_loss = criterion(val_outputs, y_val_tensor).item()
             
-        # FIX: Step the scheduler with the validation loss
         scheduler.step(val_loss)
             
         # 3. Early Stopping & Best Model Logic
@@ -124,7 +141,30 @@ def train():
             print(f"    Validation loss hasn't improved for {patience} epochs.")
             break
 
-    print(f"\n[4/4] Training Complete. Best model logic preserved in {save_path}")
+    print(f"\n[4/5] Training Complete. Best model logic preserved in {save_path}")
+
+    # [5/5] Full-Precision ONNX Export (No Quantization)
+    print("\n[5/5] Exporting Full-Precision ONNX Model...")
+    model.eval()
+    model.to('cpu')  # Move to CPU for export to match target environment
+    
+    # CRITICAL UPDATE: Dummy input expanded to 56 features to map correctly to L2 architecture
+    dummy_input = torch.randn(1, 50, 56)
+    onnx_path = "models/price_model_full_precision.onnx"
+    
+    torch.onnx.export(
+        model, 
+        dummy_input, 
+        onnx_path, 
+        export_params=True, 
+        opset_version=11, 
+        do_constant_folding=True, # Merges math operations for speed
+        input_names=['input'], 
+        output_names=['output'],
+        dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
+    )
+    
+    print(f"Success: {onnx_path} saved at full float32 precision.")
 
 if __name__ == "__main__":
     train()
