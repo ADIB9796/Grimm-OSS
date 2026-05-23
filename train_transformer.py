@@ -71,6 +71,11 @@ def train():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"      Using device: {device}")
     
+    # CRITICAL FIX: Move validation data and weights to the GPU
+    X_val_tensor = torch.FloatTensor(X_val).to(device)
+    y_val_tensor = torch.LongTensor(y_val).to(device)
+    class_weights = class_weights.to(device)
+    
     # Initialize model with updated configuration (num_layers=2, dropout=0.4)
     model = PriceTransformer(input_size=56, d_model=256, nhead=8, num_layers=2, dropout=0.4).to(device)
     
@@ -152,8 +157,6 @@ def train():
     dummy_input = torch.randn(1, 50, 56)
     onnx_path = "models/BTC_price_model.onnx"
     
-    # CRITICAL FIX: dynamic_axes removed. The RL Agent processes batch sizes of 1, 
-    # so a static graph avoids the PyTorch 2.x dynamo warnings entirely.
     torch.onnx.export(
         model, 
         dummy_input, 
