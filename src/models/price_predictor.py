@@ -19,8 +19,8 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:, :x.size(1), :]
 
 class PriceTransformer(nn.Module):
-    # REDUCED COMPLEXITY: num_layers=2 (from 4), dropout=0.5 (from 0.3)
-    def __init__(self, input_size=56, d_model=256, nhead=8, num_layers=2, dropout=0.5):
+    # REDUCED COMPLEXITY: num_layers=2, dropout=0.4
+    def __init__(self, input_size=56, d_model=256, nhead=8, num_layers=2, dropout=0.4):
         super(PriceTransformer, self).__init__()
         
         # 1. Feature Projection

@@ -39,8 +39,7 @@ def train():
     # Drop timestamp before sending to the model, leaving 56 distinct features
     data_values = df_merged.drop(columns=['timestamp']).values 
     
-    # CRITICAL LEAKAGE FIX: Calculate mean/std ONLY on the training split (first 85%)
-    # This prevents the model from "peeking" at the validation variance.
+    # Calculate mean/std ONLY on the training split (first 85%)
     split_row = int(len(data_values) * 0.85)
     train_slice = data_values[:split_row]
     
@@ -72,24 +71,17 @@ def train():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"      Using device: {device}")
     
-    # Move validation tensors to device
-    X_val_tensor = torch.FloatTensor(X_val).to(device)
-    y_val_tensor = torch.LongTensor(y_val).to(device)
-    class_weights = class_weights.to(device)
-    
-    # Initialize model with updated configuration (num_layers=2)
-    model = PriceTransformer(input_size=56, d_model=256, nhead=8, num_layers=2, dropout=0.5).to(device)
+    # Initialize model with updated configuration (num_layers=2, dropout=0.4)
+    model = PriceTransformer(input_size=56, d_model=256, nhead=8, num_layers=2, dropout=0.4).to(device)
     
     criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
     
-    # LEARNING RATE ADJUSTMENT: Dropped to 5e-5 for stable Transformer training
-    optimizer = optim.AdamW(model.parameters(), lr=5e-05, weight_decay=1e-2)
+    # OPTIMIZER: weight_decay adjusted to 1e-3 for better L2 regularization
+    optimizer = optim.AdamW(model.parameters(), lr=5e-05, weight_decay=1e-3)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
     epochs = 100 
     batch_size = 64
-    
-    # PATIENCE REDUCED: 8 epochs without improvement triggers termination
     patience = 8
     patience_counter = 0
     best_val_loss = float('inf')
@@ -152,7 +144,7 @@ def train():
 
     print(f"\n[4/5] Training Complete. Best model logic preserved in {save_path}")
 
-    # [5/5] Full-Precision ONNX Export (No Quantization)
+    # [5/5] Full-Precision ONNX Export
     print("\n[5/5] Exporting Full-Precision ONNX Model...")
     model.eval()
     model.to('cpu') 
@@ -160,6 +152,8 @@ def train():
     dummy_input = torch.randn(1, 50, 56)
     onnx_path = "models/BTC_price_model.onnx"
     
+    # CRITICAL FIX: dynamic_axes removed. The RL Agent processes batch sizes of 1, 
+    # so a static graph avoids the PyTorch 2.x dynamo warnings entirely.
     torch.onnx.export(
         model, 
         dummy_input, 
@@ -168,11 +162,10 @@ def train():
         opset_version=18, 
         do_constant_folding=True, 
         input_names=['input'], 
-        output_names=['output'],
-        dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}
+        output_names=['output']
     )
     
-    print(f"Success: {onnx_path} saved at full float32 precision.")
+    print(f"Success: {onnx_path} saved cleanly at full float32 precision.")
 
 if __name__ == "__main__":
     train()
