@@ -38,8 +38,14 @@ def train():
 
     # Drop timestamp before sending to the model, leaving 56 distinct features
     data_values = df_merged.drop(columns=['timestamp']).values 
-    data_mean = np.mean(data_values, axis=0)
-    data_std = np.std(data_values, axis=0) + 1e-8
+    
+    # CRITICAL LEAKAGE FIX: Calculate mean/std ONLY on the training split (first 85%)
+    # This prevents the model from "peeking" at the validation variance.
+    split_row = int(len(data_values) * 0.85)
+    train_slice = data_values[:split_row]
+    
+    data_mean = np.mean(train_slice, axis=0)
+    data_std = np.std(train_slice, axis=0) + 1e-8
     normalized_data = (data_values - data_mean) / data_std
 
     print("[2/5] Building Volatility-Scaled Sequences (Seq Length: 50)...")
@@ -71,17 +77,20 @@ def train():
     y_val_tensor = torch.LongTensor(y_val).to(device)
     class_weights = class_weights.to(device)
     
-    # Initialize model with 56 input features and 256 d_model capacity
-    model = PriceTransformer(input_size=56, d_model=256, nhead=8, num_layers=4).to(device)
+    # Initialize model with updated configuration (num_layers=2)
+    model = PriceTransformer(input_size=56, d_model=256, nhead=8, num_layers=2, dropout=0.5).to(device)
     
-    # DIAMOND FEATURE: Label Smoothing 0.1
     criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
-    optimizer = optim.AdamW(model.parameters(), lr=0.0001, weight_decay=1e-2)
-    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
+    
+    # LEARNING RATE ADJUSTMENT: Dropped to 5e-5 for stable Transformer training
+    optimizer = optim.AdamW(model.parameters(), lr=5e-05, weight_decay=1e-2)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
     epochs = 100 
     batch_size = 64
-    patience = 15
+    
+    # PATIENCE REDUCED: 8 epochs without improvement triggers termination
+    patience = 8
     patience_counter = 0
     best_val_loss = float('inf')
 
@@ -146,9 +155,8 @@ def train():
     # [5/5] Full-Precision ONNX Export (No Quantization)
     print("\n[5/5] Exporting Full-Precision ONNX Model...")
     model.eval()
-    model.to('cpu')  # Move to CPU for export to match target environment
+    model.to('cpu') 
     
-    # CRITICAL UPDATE: Dummy input expanded to 56 features to map correctly to L2 architecture
     dummy_input = torch.randn(1, 50, 56)
     onnx_path = "models/BTC_price_model.onnx"
     
@@ -158,7 +166,7 @@ def train():
         onnx_path, 
         export_params=True, 
         opset_version=18, 
-        do_constant_folding=True, # Merges math operations for speed
+        do_constant_folding=True, 
         input_names=['input'], 
         output_names=['output'],
         dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}}

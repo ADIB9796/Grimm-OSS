@@ -19,9 +19,8 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:, :x.size(1), :]
 
 class PriceTransformer(nn.Module):
-    # input_size updated to 56 (28 features from 1h + 28 features from 4h L2 Depth integration)
-    # d_model bumped to 256 to accommodate the wider data stream
-    def __init__(self, input_size=56, d_model=256, nhead=8, num_layers=4, dropout=0.3):
+    # REDUCED COMPLEXITY: num_layers=2 (from 4), dropout=0.5 (from 0.3)
+    def __init__(self, input_size=56, d_model=256, nhead=8, num_layers=2, dropout=0.5):
         super(PriceTransformer, self).__init__()
         
         # 1. Feature Projection
@@ -33,7 +32,7 @@ class PriceTransformer(nn.Module):
         # 3. Positional Encoding
         self.pos_encoder = PositionalEncoding(d_model)
         
-        # 4. Transformer
+        # 4. Transformer (Shallower to prevent overfitting)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
@@ -47,7 +46,7 @@ class PriceTransformer(nn.Module):
             enable_nested_tensor=False
         )
 
-        # 5. Classifier (Scaled up for 256 dimensions)
+        # 5. Classifier
         self.fc = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.LeakyReLU(0.2),
