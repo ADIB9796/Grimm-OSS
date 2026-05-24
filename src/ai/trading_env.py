@@ -2,20 +2,16 @@ import numpy as np
 import pandas as pd
 import gymnasium as gym
 from gymnasium import spaces
-import torch
+import onnxruntime as ort
 
 from src.risk.risk_manager import RiskManager
-from src.models.price_predictor import PriceTransformer
 
 class TradingEnvironment(gym.Env):
     def __init__(self, data, initial_balance=10000, transaction_cost=0.0015, is_training=False):
         super(TradingEnvironment, self).__init__()
         self.raw_data = data.copy()
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         # --- CALCULATE RAW ATR FOR RISK MANAGER ---
-        # Note: raw_data no longer has high/low directly, it has high, low, high_4h, low_4h
-        # We compute ATR on the 1h timeframe (first few columns)
         high_low = self.raw_data['high'] - self.raw_data['low']
         high_close = np.abs(self.raw_data['high'] - self.raw_data['close'].shift(1))
         low_close = np.abs(self.raw_data['low'] - self.raw_data['close'].shift(1))
@@ -37,18 +33,17 @@ class TradingEnvironment(gym.Env):
             is_training=is_training
         )
         self.peak_balance = initial_balance 
-        
         self.seq_len = 50
         
-        # CRITICAL UPDATE: Load Diamond-Tier architecture
-        self.price_model = PriceTransformer(input_size=56, d_model=256, nhead=8, num_layers=4).to(self.device)
-        
+        # CRITICAL UPDATE: Load Transformer using ONNX Runtime
+        self.onnx_path = "models/BTC_price_model.onnx"
         try:
-            self.price_model.load_state_dict(torch.load("models/price_model_v2.pth", map_location=self.device, weights_only=True))
-        except FileNotFoundError:
-            print("[WARN] Transformer weights not found. Running with uninitialized 'eyes'.")
+            self.price_model_sess = ort.InferenceSession(self.onnx_path, providers=['CPUExecutionProvider'])
+            self.input_name = self.price_model_sess.get_inputs()[0].name
+        except Exception as e:
+            print(f"[WARN] Transformer ONNX not found at {self.onnx_path}. Error: {e}")
+            self.price_model_sess = None
             
-        self.price_model.eval()
         self.history = []
         self.current_pred = np.array([0.0, 1.0, 0.0])
         
@@ -72,10 +67,20 @@ class TradingEnvironment(gym.Env):
         return df
 
     def get_prediction(self, seq):
-        with torch.no_grad():
-            seq_tensor = torch.FloatTensor(seq).unsqueeze(0).to(self.device)
-            pred = self.price_model(seq_tensor).cpu().numpy()[0]
-        return pred
+        if self.price_model_sess is None:
+            return np.array([0.0, 1.0, 0.0], dtype=np.float32)
+            
+        # ONNX expects batch dimension: (1, 50, 56)
+        seq_input = np.expand_dims(seq, axis=0).astype(np.float32)
+        
+        # Run inference
+        logits = self.price_model_sess.run(None, {self.input_name: seq_input})[0][0]
+        
+        # Convert raw logits to probabilities via Softmax
+        e_x = np.exp(logits - np.max(logits))
+        probabilities = e_x / e_x.sum()
+        
+        return probabilities
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -95,7 +100,7 @@ class TradingEnvironment(gym.Env):
     def _get_observation(self):
         full_state = self.data.iloc[self.current_step].values.astype(np.float32)
         
-        # CRITICAL UPDATE: Extract exactly the first 56 columns for the L2 Transformer
+        # Extract exactly the first 56 columns for the L2 Transformer
         transformer_input = full_state[:56] 
         
         self.history.append(transformer_input)

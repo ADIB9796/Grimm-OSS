@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.onnx
 import numpy as np
 import random
 import os
@@ -149,3 +150,29 @@ class RLAgent:
         self.epsilon = checkpoint['epsilon']
         self.step_count = checkpoint['step_count']
         return checkpoint['episode']
+        
+    def export_onnx(self, filepath):
+        """Exports the trained DQN agent to ONNX format."""
+        print(f"\n[INFO] Exporting RL Agent to ONNX at {filepath}...")
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        
+        self.model.eval()
+        self.model.to('cpu')
+        
+        # Create a dummy input matching the expected environment state shape
+        dummy_input = torch.randn(1, self.state_size)
+        
+        torch.onnx.export(
+            self.model,
+            dummy_input,
+            filepath,
+            export_params=True,
+            opset_version=18,
+            do_constant_folding=True,
+            input_names=['state_input'],
+            output_names=['q_values']
+        )
+        
+        # Return model back to device just in case it's used afterwards
+        self.model.to(self.device)
+        print("[SUCCESS] RL Agent exported to ONNX.")

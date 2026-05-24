@@ -2,16 +2,17 @@ import os
 import numpy as np
 import pandas as pd
 from src.data.data_manager import DataManager
-from src.env.trading_env import TradingEnvironment
-from src.agents.rl_agent import RLAgent
+from src.ai.trading_env import TradingEnvironment
+from src.ai.rl_agent import RLAgent
 from src.ai.optuna_tuner import run_optimization
 
 # ==========================================
 # CONFIGURATION TOGGLES
 # ==========================================
 USE_OPTUNA = False  
-CHECKPOINT_PATH = "models/rl_checkpoint.pth"
-FINAL_MODEL_PATH = "models/rl_trading_model.pth"
+CHECKPOINT_PATH = "models/BTC_rl_checkpoint.pth"
+FINAL_MODEL_PATH = "models/BTC_rl_trading_model.pth"
+FINAL_ONNX_PATH = "models/BTC_rl_trading_model.onnx"
 
 # Trial 22 "Sharpe 6.00" Winner
 BEST_DNA = {
@@ -107,12 +108,16 @@ def main():
             agent.save_checkpoint(CHECKPOINT_PATH, e + 1)
             print(f"      [System] Checkpoint saved at episode {e+1}")
 
+    # Final Saves & ONNX Export
     agent.save(FINAL_MODEL_PATH)
+    agent.export_onnx(FINAL_ONNX_PATH)
+    
     if os.path.exists(CHECKPOINT_PATH):
         os.remove(CHECKPOINT_PATH)
         
     print("\nTRAINING FINISHED!")
-    print(f"      Production Model saved to {FINAL_MODEL_PATH}")
+    print(f"      PyTorch Checkpoint saved to {FINAL_MODEL_PATH}")
+    print(f"      Production ONNX Model saved to {FINAL_ONNX_PATH}")
 
 if __name__ == "__main__":
     main()
