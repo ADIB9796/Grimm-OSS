@@ -44,6 +44,13 @@ class TradingEnvironment(gym.Env):
             print(f"[WARN] Transformer ONNX not found at {self.onnx_path}. Error: {e}")
             self.price_model_sess = None
             
+        # --- CRITICAL SPEED UPDATE: PRE-COMPUTE ALL PREDICTIONS ---
+        if self.price_model_sess is not None:
+            print("      [INFO] Pre-computing ONNX Transformer predictions. This takes ~5 seconds once...")
+            self.precomputed_preds = self._precompute_all_predictions()
+        else:
+            self.precomputed_preds = [np.array([0.0, 1.0, 0.0], dtype=np.float32) for _ in range(len(self.data))]
+            
         self.history = []
         self.current_pred = np.array([0.0, 1.0, 0.0])
         
@@ -66,21 +73,29 @@ class TradingEnvironment(gym.Env):
                 
         return df
 
-    def get_prediction(self, seq):
-        if self.price_model_sess is None:
-            return np.array([0.0, 1.0, 0.0], dtype=np.float32)
+    def _precompute_all_predictions(self):
+        """Runs the sliding window over the static dataset ONE TIME to save hours of training."""
+        predictions = []
+        history = []
+        
+        for i in range(len(self.data)):
+            full_state = self.data.iloc[i].values.astype(np.float32)
+            transformer_input = full_state[:56]
             
-        # ONNX expects batch dimension: (1, 50, 56)
-        seq_input = np.expand_dims(seq, axis=0).astype(np.float32)
-        
-        # Run inference
-        logits = self.price_model_sess.run(None, {self.input_name: seq_input})[0][0]
-        
-        # Convert raw logits to probabilities via Softmax
-        e_x = np.exp(logits - np.max(logits))
-        probabilities = e_x / e_x.sum()
-        
-        return probabilities
+            history.append(transformer_input)
+            if len(history) > self.seq_len:
+                history.pop(0)
+                
+            if len(history) == self.seq_len:
+                seq_input = np.expand_dims(np.array(history), axis=0).astype(np.float32)
+                logits = self.price_model_sess.run(None, {self.input_name: seq_input})[0][0]
+                e_x = np.exp(logits - np.max(logits))
+                probs = e_x / e_x.sum()
+                predictions.append(probs)
+            else:
+                predictions.append(np.array([0.0, 1.0, 0.0], dtype=np.float32))
+                
+        return predictions
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -92,27 +107,15 @@ class TradingEnvironment(gym.Env):
         self.entry_price = 0
         self.current_step = 0
         self.returns = []
-        self.history = []
-        self.current_pred = np.array([0.0, 1.0, 0.0])
         
         return self._get_observation(), {}
 
     def _get_observation(self):
+        # O(1) Instant Lookup instead of ONNX Inference
         full_state = self.data.iloc[self.current_step].values.astype(np.float32)
-        
-        # Extract exactly the first 56 columns for the L2 Transformer
-        transformer_input = full_state[:56] 
-        
-        self.history.append(transformer_input)
-        if len(self.history) > self.seq_len:
-            self.history.pop(0)
+        current_pred = self.precomputed_preds[self.current_step]
             
-        if len(self.history) == self.seq_len:
-            self.current_pred = self.get_prediction(np.array(self.history))
-        else:
-            self.current_pred = np.array([0.0, 1.0, 0.0])
-            
-        return np.concatenate([full_state, self.current_pred]).astype(np.float32)
+        return np.concatenate([full_state, current_pred]).astype(np.float32)
 
     def step(self, action):
         done = False
@@ -120,25 +123,35 @@ class TradingEnvironment(gym.Env):
         
         price = self.raw_data.iloc[self.current_step + offset]["close"]
         
+        # LIVE SIMULATION: 3 Basis Points (0.03%) adverse slippage for execution latency
+        slippage_pct = 0.0003 
+        
         raw_reward = 0
         trade_return = 0
 
+        # Look up pre-computed prediction
+        current_pred = self.precomputed_preds[self.current_step]
+
         if action == 1: 
             if self.position == 0:
-                win_prob = self.current_pred[2] 
+                win_prob = current_pred[2] 
                 if win_prob >= 0.60:
                     size = self.risk_manager.get_kelly_size(win_prob)
                     if size > 0:
                         self.position = size 
-                        self.entry_price = price
+                        # Adverse Execution: You buy higher than expected
+                        self.entry_price = price * (1 + slippage_pct)
                         raw_reward -= self.transaction_cost
                 else:
                     action = 0 
 
         elif action == 2: 
             if self.position > 0:
-                trade_return = (price - self.entry_price) / self.entry_price
-                pnl = self.position * (price - self.entry_price)
+                # Adverse Execution: You sell lower than expected
+                exit_price = price * (1 - slippage_pct)
+                
+                trade_return = (exit_price - self.entry_price) / self.entry_price
+                pnl = self.position * (exit_price - self.entry_price)
                 new_balance = self.risk_manager.balance + pnl
                 self.risk_manager.update_performance(trade_return, new_balance)
                 

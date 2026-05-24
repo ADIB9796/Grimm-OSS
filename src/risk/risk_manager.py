@@ -62,12 +62,11 @@ class RiskManager:
         return current_dd < self.max_drawdown
 
     # -------------------------------------------------------------
-    # POSITION SIZING (KELLY CRITERION - LEVERAGE ADJUSTED)
+    # POSITION SIZING & BROKER EXECUTION 
     # -------------------------------------------------------------
     def get_kelly_size(self, win_probability: float):
         """
-        Calculates optimal margin allocation based on Kelly Criterion,
-        adjusted so that leveraged exposure doesn't blow the account.
+        Calculates optimal margin allocation based on Kelly Criterion.
         Returns: Percentage of BALANCE to use as MARGIN.
         """
         if not self.can_trade():
@@ -93,6 +92,23 @@ class RiskManager:
         margin_pct = target_exposure_pct / self.active_leverage
         
         return margin_pct
+
+    def calculate_lot_size(self, margin_pct: float, current_price: float, contract_size: float = 1.0):
+        """
+        Converts the abstract margin percentage into a strict Lot Size for broker APIs.
+        Exness BTC/USD standard contract size is typically 1 BTC.
+        """
+        # How much cash are we actually risking?
+        usable_margin = self.balance * margin_pct
+        
+        # Total market exposure with leverage
+        notional_exposure = usable_margin * self.active_leverage
+        
+        # Convert exposure to standard lots
+        lots = notional_exposure / (contract_size * current_price)
+        
+        # Exness typically supports micro lots (0.01) for crypto, round down for safety
+        return max(0.01, round(lots, 3))
 
     # -------------------------------------------------------------
     # STOP-LOSS

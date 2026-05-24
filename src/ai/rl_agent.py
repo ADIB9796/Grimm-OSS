@@ -34,7 +34,6 @@ class PrioritizedReplayBuffer:
 class DQN(nn.Module):
     def __init__(self, state_size, action_size):
         super(DQN, self).__init__()
-        # Widen network to handle 60+ dimensional state vector
         self.network = nn.Sequential(
             nn.Linear(state_size, 512),
             nn.LayerNorm(512), 
@@ -67,14 +66,19 @@ class RLAgent:
         self.epsilon_decay = epsilon_decay
         self.batch_size = batch_size
         self.step_count = 0
+        
+        self.last_q_val = 0.0 # Tracking metric for stability monitoring
 
     def act(self, state):
-        if np.random.rand() <= self.epsilon:
-            return random.randrange(self.action_size)
-        
         state_t = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         with torch.no_grad():
             q_vals = self.model(state_t).cpu().numpy()[0]
+            
+        # Log the max Q-value for training analysis
+        self.last_q_val = float(np.max(q_vals))
+        
+        if np.random.rand() <= self.epsilon:
+            return random.randrange(self.action_size)
             
         action = int(np.argmax(q_vals))
         
@@ -152,14 +156,12 @@ class RLAgent:
         return checkpoint['episode']
         
     def export_onnx(self, filepath):
-        """Exports the trained DQN agent to ONNX format."""
         print(f"\n[INFO] Exporting RL Agent to ONNX at {filepath}...")
         os.makedirs(os.path.dirname(filepath), exist_ok=True)
         
         self.model.eval()
         self.model.to('cpu')
         
-        # Create a dummy input matching the expected environment state shape
         dummy_input = torch.randn(1, self.state_size)
         
         torch.onnx.export(
@@ -173,6 +175,5 @@ class RLAgent:
             output_names=['q_values']
         )
         
-        # Return model back to device just in case it's used afterwards
         self.model.to(self.device)
         print("[SUCCESS] RL Agent exported to ONNX.")

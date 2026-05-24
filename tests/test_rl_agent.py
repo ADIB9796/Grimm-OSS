@@ -88,9 +88,16 @@ def main():
         state, _ = env.reset() 
         total_reward = 0
         done = False
+        
+        # Track Q-values for this episode
+        q_values_episode = []
 
         while not done:
             action = agent.act(state) 
+            
+            # Log the max Q-value from the agent's decision step
+            q_values_episode.append(agent.last_q_val)
+            
             next_state, reward, done, truncated, info = env.step(action) 
             
             agent.remember(state, action, reward, next_state, done) 
@@ -100,9 +107,10 @@ def main():
             total_reward += reward
         
         agent.update_epsilon() 
+        avg_q_val = np.mean(q_values_episode)
 
         if (e + 1) % 10 == 0: 
-            print(f"Episode {e+1:04d}/{episodes} | Reward: {total_reward:6.2f} | Epsilon: {agent.epsilon:.4f}") 
+            print(f"Episode {e+1:04d}/{episodes} | Reward: {total_reward:7.2f} | Avg Q: {avg_q_val:6.2f} | Epsilon: {agent.epsilon:.4f}") 
 
         if (e + 1) % 50 == 0:
             agent.save_checkpoint(CHECKPOINT_PATH, e + 1)
