@@ -76,18 +76,18 @@ def train():
     y_val_tensor = torch.LongTensor(y_val).to(device)
     class_weights = class_weights.to(device)
     
-    # Initialize model with updated configuration (num_layers=2, dropout=0.4)
-    model = PriceTransformer(input_size=56, d_model=256, nhead=8, num_layers=2, dropout=0.4).to(device)
+    # Initialize model with updated configuration
+    model = PriceTransformer(input_size=56, d_model=256, nhead=8, num_layers=3, dropout=0.25).to(device)
     
     criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
     
-    # OPTIMIZER: weight_decay adjusted to 1e-3 for better L2 regularization
-    optimizer = optim.AdamW(model.parameters(), lr=5e-05, weight_decay=1e-3)
+    # OPTIMIZER & SCHEDULER
+    optimizer = optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-3)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
     epochs = 100 
     batch_size = 64
-    patience = 8
+    patience = 10
     patience_counter = 0
     best_val_loss = float('inf')
 
