@@ -34,8 +34,7 @@ def create_sequences(data, seq_len=50):
         if len(recent_returns) < vol_window:
             continue
             
-        # DYNAMIC THRESHOLD: Reduced to 1.0 standard deviations to balance classes
-        dynamic_threshold = np.std(recent_returns) * 1.0
+        dynamic_threshold = np.std(recent_returns) * 2.5
         
         current_price = close_prices[current_idx]
         next_price = close_prices[next_idx]

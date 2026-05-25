@@ -14,7 +14,7 @@ CHECKPOINT_PATH = "models/BTC_rl_checkpoint.pth"
 FINAL_MODEL_PATH = "models/BTC_rl_trading_model.pth"
 FINAL_ONNX_PATH = "models/BTC_rl_trading_model.onnx"
 
-# Trial 22 "Sharpe 6.00" Winner
+# Top performing structural hyperparameters
 BEST_DNA = {
     'lr': 1.700933528056293e-05, 
     'gamma': 0.9787113384975228, 
@@ -23,17 +23,17 @@ BEST_DNA = {
 }
 
 def main():
-    print("\n[1/4] Fetching Multi-Timeframe Data (L2 Synthesis)...")
+    print("\n[1/4] Extracting Core Historical Series (L2 Data Synthesizer)...")
     manager = DataManager()
     
     df_1h = manager.get_crypto_data("kucoin", "BTC/USDT", "1h", 6000)
     df_4h = manager.get_crypto_data("kucoin", "BTC/USDT", "4h", 2000)
 
     if df_1h.empty or df_4h.empty:
-        print("[ERROR] Failed to fetch data. Exiting.")
+        print("[ERROR] High-density timeframe frames failed to download.")
         return
 
-    print("\n[2/4] Merging Timeframes & Aligning Order Book States...")
+    print("\n[2/4] Merging Multi-Timeframe Matrices...")
     df_4h = df_4h.add_suffix('_4h').rename(columns={'timestamp_4h': 'timestamp'})
     
     df_merged = pd.merge_asof(
@@ -44,16 +44,15 @@ def main():
     ).dropna()
     
     if len(df_merged) <= 1500:
-        print(f"[ERROR] Synced only {len(df_merged)} bars. Need >1500 for a proper split.")
+        print("[ERROR] Data matrix sync range insufficient.")
         return
 
-    # Drop timestamp to pass a pure 56-feature float array to the env
     df_merged = df_merged.drop(columns=['timestamp'])
     train_data = df_merged.iloc[:-1000]
     
     print(f"      [INFO] Environment Dataset prepared with {train_data.shape[1]} features.")
 
-    print("\n[3/4] Hyperparameter Configuration...")
+    print("\n[3/4] Initializing Agent Parameter Mappings...")
     if USE_OPTUNA:
         print("      Running Optuna Optimization...")
         best_params = run_optimization(train_data) 
@@ -64,9 +63,9 @@ def main():
         print("      Skipping Optuna. Loading 'Turbo' DNA...")
         best_params = BEST_DNA
 
-    print("\n[4/4] STARTING L2 REINFORCEMENT TRAINING...")
-    
-    env = TradingEnvironment(train_data)
+    print("\n[4/4] LOADING RUNTIME ENGINE ($100 ISOLATION MODE)...")
+    # Hardcode initialization parameters to force $100 baseline boundaries
+    env = TradingEnvironment(train_data, initial_balance=100.0, transaction_cost=0.0015, is_training=True)
     state_size = env.observation_space.shape[0] 
     action_size = env.action_space.n 
 
@@ -80,9 +79,9 @@ def main():
     start_episode = 0
 
     if os.path.exists(CHECKPOINT_PATH):
-        print(f"\n[INFO] Found existing checkpoint at {CHECKPOINT_PATH}")
+        print(f"\n[INFO] Found active safe-state checkpoint at {CHECKPOINT_PATH}")
         start_episode = agent.load_checkpoint(CHECKPOINT_PATH)
-        print(f"       Resuming from Episode {start_episode} with Epsilon: {agent.epsilon:.4f}")
+        print(f"       Resuming training frame at Episode {start_episode}")
 
     for e in range(start_episode, episodes):
         state, _ = env.reset() 
@@ -90,13 +89,13 @@ def main():
         done = False
         
         # Track Q-values for this episode
-        q_values_episode = []
+        q_value_tracker = []
 
         while not done:
             action = agent.act(state) 
             
             # Log the max Q-value from the agent's decision step
-            q_values_episode.append(agent.last_q_val)
+            q_value_tracker.append(agent.last_q_val)
             
             next_state, reward, done, truncated, info = env.step(action) 
             
@@ -107,10 +106,10 @@ def main():
             total_reward += reward
         
         agent.update_epsilon() 
-        avg_q_val = np.mean(q_values_episode)
+        avg_q = np.mean(q_value_tracker) if q_value_tracker else 0.0
 
         if (e + 1) % 10 == 0: 
-            print(f"Episode {e+1:04d}/{episodes} | Reward: {total_reward:7.2f} | Avg Q: {avg_q_val:6.2f} | Epsilon: {agent.epsilon:.4f}") 
+            print(f"Ep {e+1:04d}/{episodes} | Total Reward: {total_reward:7.2f} | Avg Q-Val: {avg_q:6.2f} | Epsilon: {agent.epsilon:.4f} | Terminal Wallet: ${env.risk_manager.balance:.2f}") 
 
         if (e + 1) % 50 == 0:
             agent.save_checkpoint(CHECKPOINT_PATH, e + 1)
@@ -123,7 +122,7 @@ def main():
     if os.path.exists(CHECKPOINT_PATH):
         os.remove(CHECKPOINT_PATH)
         
-    print("\nTRAINING FINISHED!")
+    print("\n[SUCCESS] Pipeline Completed.")
     print(f"      PyTorch Checkpoint saved to {FINAL_MODEL_PATH}")
     print(f"      Production ONNX Model saved to {FINAL_ONNX_PATH}")
 
