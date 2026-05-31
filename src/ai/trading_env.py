@@ -117,9 +117,11 @@ class TradingEnvironment(gym.Env):
 
         if action == 1: # Entry Order execution
             if self.position == 0:
-                win_prob = current_pred[2] 
-                if win_prob >= 0.65: # Restrict to explicit breakout signals
-                    margin_size = self.risk_manager.get_kelly_size(win_prob)
+                # FIX: Check if the Transformer identifies Class 2 (Up) as the dominant alpha signal
+                predicted_class = np.argmax(current_pred)
+                
+                if predicted_class == 2 and current_pred[2] >= 0.40: # Dynamic momentum floor
+                    margin_size = self.risk_manager.get_kelly_size(current_pred[2])
                     lot_size = self.risk_manager.calculate_lot_size(margin_size, price)
                     
                     if lot_size > 0:
@@ -128,7 +130,7 @@ class TradingEnvironment(gym.Env):
                         self.entry_price = price * (1 + slippage_pct) # Buy higher due to latency
                         raw_reward -= self.transaction_cost
                 else:
-                    action = 0 
+                    action = 0 # Gate kept safely if it's just a neutral consolidation layer
 
         elif action == 2: # Exit Order execution
             if self.position > 0:
